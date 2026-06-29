@@ -1,0 +1,133 @@
+# ============================================================================
+# Sam_Invest - configuration de la WATCHLIST et des regles
+# ----------------------------------------------------------------------------
+# 1. Copie ce fichier en "config.yaml" (a cote de app.py) OU edite directement
+#    le config.yaml fourni (deja pre-rempli avec 20 instruments Tech/emergents).
+# 2. Ajoute/retire/modifie librement les instruments de la watchlist.
+# 3. NE METS PAS de cles API ici -> elles vont dans le fichier .env.
+#
+# Ce n'est PAS un suivi de portefeuille : pas de quantites, pas de PRU, pas
+# d'allocation. C'est une liste d'instruments a SURVEILLER. L'outil agrege les
+# donnees, calcule des indicateurs/signaux par du code, applique des regles
+# explicites, et signale ce qui merite ton attention. La decision reste humaine.
+# ============================================================================
+
+# --- Devise d'affichage (informative) --------------------------------------
+devise: "EUR"
+
+# ============================================================================
+# WATCHLIST
+# ----------------------------------------------------------------------------
+# Une entree par instrument surveille. Champs :
+#   ticker : symbole yfinance.
+#            - Actions US / ADR : "NVDA", "TSM", "BABA"...
+#            - Euronext Paris    : suffixe ".PA" (ex: "AIR.PA")
+#            - Amsterdam         : suffixe ".AS" (ex: "ASML.AS")
+#   nom    : libelle libre pour l'affichage.
+#   type   : "action" ou "ETF". (Les fondamentaux et l'alarme de degradation
+#            ne s'appliquent qu'aux "action".)
+#   theme  : etiquette libre pour regrouper (ex: "Tech", "Emergents",
+#            "Tech & Emergents", "Semis", "Inde"...).
+# ============================================================================
+watchlist:
+  - ticker: "NVDA"
+    nom: "Nvidia"
+    type: "action"
+    theme: "Tech"
+
+  - ticker: "TSM"
+    nom: "Taiwan Semiconductor"
+    type: "action"
+    theme: "Tech & Emergents"
+
+  - ticker: "QQQ"
+    nom: "Invesco Nasdaq-100"
+    type: "ETF"
+    theme: "Tech"
+
+  # ... ajoute autant de lignes que tu veux ...
+
+# ============================================================================
+# REGLE 1 - Flag de chute brutale (signal d'attention)
+# ----------------------------------------------------------------------------
+# Leve un flag si l'une des conditions est vraie sur un instrument.
+# Sur une watchlist, une forte baisse peut signaler une opportunite OU un
+# risque : l'outil attire seulement l'attention, il ne tranche pas.
+# ============================================================================
+flag_chute:
+  # Baisse sur une seule seance (cloture vs cloture precedente). NEGATIF.
+  seuil_seance_pct: -7
+  # Baisse depuis le plus-haut 52 semaines (drawdown). NEGATIF.
+  seuil_drawdown_52s_pct: -20
+
+# ============================================================================
+# REGLE 2 - Signaux techniques
+# ----------------------------------------------------------------------------
+# Contexte technique calcule par code (deterministe) pour chaque instrument :
+#   - tendance : SMA50 vs SMA200 (haussiere / baissiere / neutre)
+#   - RSI 14   : survendu / suracheté / neutre
+#   - position dans le range 52 semaines (proche du plus-bas / plus-haut)
+# Ces signaux sont toujours affiches dans le tableau. Si flags_actifs = true,
+# les cas notables (RSI extreme, proche du plus-bas 52s) remontent aussi en
+# flags dans le Briefing.
+# ============================================================================
+signaux_techniques:
+  rsi_survente: 30                 # RSI < ce seuil -> "survendu"
+  rsi_surachat: 70                 # RSI > ce seuil -> "suracheté"
+  seuil_proche_bas_52s_pct: 10     # position dans le range < 10% -> "proche du plus-bas 52s"
+  flags_actifs: true
+
+# ============================================================================
+# REGLE 3 - Alarme de degradation (ACTIONS UNIQUEMENT)
+# ----------------------------------------------------------------------------
+# Surveille si la these d'une action se casse via quelques fondamentaux simples.
+# Ne s'applique pas aux ETF. Si une metrique est indisponible, elle est ignoree
+# (marquee "n/d") sans planter.
+# ============================================================================
+degradation_actions:
+  # Croissance annuelle du chiffre d'affaires (YoY) minimale, en %.
+  croissance_ca_min_pct:
+    actif: true
+    seuil: 0                       # alarme si CA en recul (YoY < 0)
+  # Marge nette minimale acceptable, en %.
+  marge_nette_min_pct:
+    actif: true
+    seuil: 5                       # alarme si marge nette < 5%
+  # Endettement maximal : ratio dette / capitaux propres (debt-to-equity).
+  dette_sur_capitaux_max:
+    actif: true
+    seuil: 2.0                     # alarme si D/E > 2.0
+
+# ============================================================================
+# REGLE 4 - Evenements a venir (resultats / ex-dividende)
+# ----------------------------------------------------------------------------
+# Leve un flag d'attention quand un evenement approche (utile avant un versement
+# DCA). Actions uniquement (les ETF n'ont pas de date de resultats).
+# ============================================================================
+evenements:
+  resultats_dans_jours: 7          # flag si resultats dans <= N jours
+  exdiv_dans_jours: 7              # affiche dans le tableau ; pas de flag par defaut
+
+# ============================================================================
+# REGLE 5 - Revisions d'estimations (ACTIONS UNIQUEMENT) - signal AVANCE
+# ----------------------------------------------------------------------------
+# Regarde la REVISION des attentes (analystes qui relevent vs abaissent leurs
+# estimations d'EPS sur 30 jours), plutot que le realise passe. Signal plus
+# precoce qu'une these s'effrite. Donnee via yfinance.
+# ============================================================================
+revisions_estimations:
+  actif: true
+  seuil_net_revisions_30j: 0       # alerte si (hausses - baisses) sur 30j < ce seuil
+
+# ============================================================================
+# NEWS
+# ============================================================================
+news:
+  max_par_ticker: 10               # nb max de news par instrument lors d'une maj
+  anciennete_max_jours: 14         # anciennete max prise en compte
+
+# ============================================================================
+# BRIEFING "delta" (ce qui a change depuis la derniere visite)
+# ============================================================================
+briefing:
+  delta_variation_notable_pct: 3   # variation de cours (depuis 'vu') mise en avant

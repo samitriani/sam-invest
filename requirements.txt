@@ -1,0 +1,18 @@
+# Sam_Invest - dependances
+# Couche donnees (deterministe, sans LLM)
+streamlit>=1.40
+pandas>=2.2
+numpy>=2.1
+yfinance>=0.2.50
+requests>=2.32
+PyYAML>=6.0
+python-dotenv>=1.0
+
+# Couche jugement (API Claude) - resume/classe les news + synthese en langage naturel
+anthropic>=0.40
+
+# NOTE indicateurs techniques :
+# pandas-ta (upstream) est incompatible avec numpy 2.x / Python 3.13
+# (il fait `from numpy import NaN`, supprime dans numpy 2).
+# Les indicateurs sont donc calcules en pandas pur dans sam_invest/indicators.py
+# -> deterministe, sans LLM, sans dependance fragile (priorite : fiabilite).

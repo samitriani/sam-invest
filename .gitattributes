@@ -1,0 +1,4 @@
+# Normalisation des fins de ligne (depot cross-plateforme)
+* text=auto
+*.bat text eol=crlf
+*.command text eol=lf

@@ -1,0 +1,16 @@
+# Secrets et config perso
+.env
+config.yaml
+
+# Base de donnees locale
+*.db
+*.sqlite
+*.sqlite3
+data/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.streamlit/secrets.toml
