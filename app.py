@@ -182,6 +182,37 @@ def afficher_fondamentaux(ticker: str) -> None:
             )
 
 
+def rendre_news(n: dict, a: dict | None = None, compact: bool = False) -> None:
+    """Affiche une news : titre (+ categorie/tonalite si analysee par Haiku),
+    resume source (mode complet), et lien proeminent vers l'article."""
+    head = n.get("headline", "")
+    if a:
+        emoji = {"positif": "🟢", "negatif": "🔴"}.get(a.get("tonalite", "neutre"), "⚪")
+        st.markdown(f"{emoji} **[{a.get('categorie', 'autre')}]** {head}")
+    else:
+        st.markdown(f"• {head}" if compact else f"**{head}**")
+
+    meta = []
+    if n.get("datetime"):
+        meta.append(n["datetime"][:10])
+    if n.get("source"):
+        meta.append(n["source"])
+    meta_txt = " · ".join(meta)
+
+    if not compact:
+        resume = (n.get("summary") or "").strip()
+        if resume:
+            st.write(resume if len(resume) <= 500 else resume[:500].rstrip() + "…")
+        elif a and a.get("resume"):
+            st.caption(a["resume"])
+
+    if n.get("url"):
+        suffix = f"  ·  _{meta_txt}_" if meta_txt else ""
+        st.markdown(f"🔗 [Lire l'article complet]({n['url']}){suffix}")
+    elif meta_txt:
+        st.caption(meta_txt)
+
+
 # ==========================================================================
 # En-tete + bouton de mise a jour GLOBALE (haut a droite)
 # ==========================================================================
@@ -386,27 +417,10 @@ with tab_news:
             except Exception:
                 analyses = {}
         with st.expander(f"{inst.ticker} — {inst.nom} ({len(raw)} news)"):
-            for n in raw:
-                head = n.get("headline", "")
-                a = analyses.get(head)
-                if a:
-                    ton = a.get("tonalite", "neutre")
-                    emoji = {"positif": "🟢", "negatif": "🔴"}.get(ton, "⚪")
-                    st.markdown(f"{emoji} **[{a.get('categorie','autre')}]** {head}")
-                else:
-                    st.markdown(f"• {head}")
-                meta = []
-                if n.get("datetime"):
-                    meta.append(n["datetime"][:10])
-                if n.get("source"):
-                    meta.append(n["source"])
-                meta_txt = " · ".join(meta)
-                if n.get("url"):
-                    st.caption(f"{meta_txt} — [lien]({n['url']})" if meta_txt else f"[lien]({n['url']})")
-                elif meta_txt:
-                    st.caption(meta_txt)
-                if a and a.get("resume"):
-                    st.caption(a["resume"])
+            for i, n in enumerate(raw):
+                if i:
+                    st.divider()
+                rendre_news(n, analyses.get(n.get("headline", "")), compact=False)
     if not une_news:
         st.caption("Aucune news en base. Clique sur « Mettre a jour les news ». Si yfinance "
                    "ne renvoie rien, ajoute une cle FINNHUB_API_KEY dans .env (source plus fiable).")
@@ -627,13 +641,7 @@ with tab_briefing:
                         analyses = {}
                 st.markdown("**News recentes :**")
                 for n in raw[:4]:
-                    head = n.get("headline", "")
-                    a = analyses.get(head)
-                    if a:
-                        emoji = {"positif": "🟢", "negatif": "🔴"}.get(a.get("tonalite", "neutre"), "⚪")
-                        st.markdown(f"- {emoji} [{a.get('categorie','autre')}] {head}")
-                    else:
-                        st.markdown(f"- {head}")
+                    rendre_news(n, analyses.get(n.get("headline", "")), compact=True)
 
 # --------------------------------------------------------------------------
 # ONGLET WATCHLIST : edition simple (ajouter / retirer / modifier des lignes)
