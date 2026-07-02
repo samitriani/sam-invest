@@ -17,6 +17,8 @@ progression permet a l'UI Streamlit d'afficher l'avancement.
 from __future__ import annotations
 
 import json
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Callable
 
@@ -121,6 +123,22 @@ def update_donnees(config: AppConfig, progress: ProgressFn | None = None) -> dic
 # ==========================================================================
 # News : recuperation + classement par Claude Haiku (cout Haiku)
 # ==========================================================================
+# La recup de news (reseau) et le classement (Claude) sont 100% I/O-bound :
+# on les parallelise via des threads (le GIL est relache pendant l'attente
+# reseau). Regle de securite SQLite : TOUT le reseau/LLM se fait dans les
+# threads, mais TOUTES les ecritures DB restent dans le thread principal
+# (SQLite tolere mal les ecritures concurrentes).
+def _existing_analysis_map(ticker: str) -> dict[str, dict]:
+    """Analyses deja en base pour ce ticker, indexees par titre original."""
+    na = db.get_news_analysis(ticker)
+    if not na or not na.get("payload"):
+        return {}
+    try:
+        return {a.get("headline", ""): a for a in json.loads(na["payload"])}
+    except Exception:
+        return {}
+
+
 def update_news(config: AppConfig, progress: ProgressFn | None = None) -> dict:
     progress = progress or _noop
     db.init_db()
@@ -137,30 +155,113 @@ def update_news(config: AppConfig, progress: ProgressFn | None = None) -> dict:
     classer = bool(s.anthropic_api_key)
     max_items = int(config.news.get("max_par_ticker", 10))
     days = int(config.news.get("anciennete_max_jours", 14))
+    workers = max(1, min(int(config.news.get("parallelisme", 8)), n))
 
-    for i, p in enumerate(instruments):
-        base = i / n
+    # ---- Progression thread-safe : phase fetch = 0..0.5, phase classement = 0.5..1
+    lock = threading.Lock()
+    counters = {"fetch": 0, "classe": 0}
+
+    def _tick(phase: str, total: int, label: str) -> None:
+        with lock:
+            counters[phase] += 1
+            done = counters[phase]
+        if classer:
+            frac = done / total * 0.5 + (0.5 if phase == "classe" else 0.0)
+        else:
+            frac = done / total
+        prefix = "Classement" if phase == "classe" else "News"
+        progress(min(frac, 1.0), f"{prefix} {done}/{total} — {label}")
+
+    # ======================================================================
+    # PHASE 1 : recuperation des news, en parallele
+    # ======================================================================
+    progress(0.0, "Recuperation des news...")
+    fetched: dict[str, list[dict]] = {}
+    errors: dict[str, str] = {}
+
+    def _fetch(ticker: str) -> tuple[str, list[dict]]:
+        return ticker, ds.fetch_news(ticker, max_items, days, s.finnhub_api_key, s.fmp_api_key)
+
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futs = {ex.submit(_fetch, p.ticker): p.ticker for p in instruments}
+        for fut in as_completed(futs):
+            t = futs[fut]
+            try:
+                _, items = fut.result()
+                fetched[t] = items
+                _tick("fetch", n, f"{t} : {len(items)} trouvees")
+            except Exception as e:
+                fetched[t] = []
+                errors[t] = str(e)
+                _tick("fetch", n, f"{t} : erreur")
+
+    # ---- Ecritures DB des news (thread principal uniquement) ----
+    for p in instruments:
         t = p.ticker
-        progress(base, f"{t} : news...")
+        items = fetched.get(t, [])
+        if t in errors:
+            details.append(f"{t} : erreur news ({errors[t]}).")
+            continue
         try:
-            items = ds.fetch_news(t, max_items, days, s.finnhub_api_key, s.fmp_api_key)
-            if items:
-                db.replace_news(t, items)
-                ok_news += 1
-                details.append(f"{t} : {len(items)} news ({items[0].get('source')}).")
-                if classer:
-                    progress(base + 0.5 / n, f"{t} : classement (Claude Haiku)...")
-                    analyse = llm.classer_news(s, t, items)
-                    if analyse is not None:
-                        db.upsert_news_analysis(
-                            t, _now(), json.dumps(analyse, ensure_ascii=False), s.model_haiku,
-                        )
-                        ok_analyse += 1
-            else:
-                db.replace_news(t, [])
-                details.append(f"{t} : aucune news recente.")
+            db.replace_news(t, items)
         except Exception as e:
-            details.append(f"{t} : erreur news ({e}).")
+            details.append(f"{t} : erreur enregistrement news ({e}).")
+            continue
+        if items:
+            ok_news += 1
+            details.append(f"{t} : {len(items)} news ({items[0].get('source')}).")
+        else:
+            details.append(f"{t} : aucune news recente.")
+
+    # ======================================================================
+    # PHASE 2 : classement Claude Haiku, en parallele
+    # Cache (#4) : on ne renvoie a Haiku que les news JAMAIS classees ;
+    # les autres sont reprises telles quelles depuis la base.
+    # ======================================================================
+    if classer:
+        targets = [p.ticker for p in instruments if fetched.get(p.ticker) and p.ticker not in errors]
+        # Prechargement des analyses existantes dans le thread principal (lecture DB).
+        existing = {t: _existing_analysis_map(t) for t in targets}
+
+        def _classify(ticker: str) -> tuple[str, list[dict]]:
+            items = fetched[ticker]
+            seen = existing.get(ticker, {})
+            nouveaux = [it for it in items if it.get("headline", "") not in seen]
+            frais: dict[str, dict] = {}
+            if nouveaux:
+                res = llm.classer_news(s, ticker, nouveaux)
+                if res:
+                    frais = {a.get("headline", ""): a for a in res}
+            # Reconstruction dans l'ordre des news actuelles : analyse fraiche > cache.
+            merged = []
+            for it in items:
+                h = it.get("headline", "")
+                a = frais.get(h) or seen.get(h)
+                if a:
+                    merged.append(a)
+            return ticker, merged
+
+        m = len(targets)
+        results: dict[str, list[dict]] = {}
+        if m:
+            with ThreadPoolExecutor(max_workers=workers) as ex:
+                futs = {ex.submit(_classify, t): t for t in targets}
+                for fut in as_completed(futs):
+                    t = futs[fut]
+                    try:
+                        _, merged = fut.result()
+                        results[t] = merged
+                    except Exception as e:
+                        details.append(f"{t} : erreur classement ({e}).")
+                    _tick("classe", m, t)
+
+            # ---- Ecritures DB des analyses (thread principal uniquement) ----
+            for t, merged in results.items():
+                if merged:
+                    db.upsert_news_analysis(
+                        t, _now(), json.dumps(merged, ensure_ascii=False), s.model_haiku,
+                    )
+                    ok_analyse += 1
 
     progress(1.0, "Termine.")
     asof = _now()

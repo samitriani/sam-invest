@@ -125,6 +125,7 @@ revisions_estimations:
 news:
   max_par_ticker: 10               # nb max de news par instrument lors d'une maj
   anciennete_max_jours: 14         # anciennete max prise en compte
+  parallelisme: 8                  # nb de tickers traites en parallele (recup + classement)
 
 # ============================================================================
 # BRIEFING "delta" (ce qui a change depuis la derniere visite)
