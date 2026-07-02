@@ -26,6 +26,7 @@ from sam_invest import db, delta, llm, signals
 from sam_invest.briefing import construire_briefing, indicateurs_ligne
 from sam_invest.data_sources import search_instruments
 from sam_invest.diagnostic import construire_diagnostic
+from sam_invest import glossaire
 from sam_invest.events import construire_evenements
 from sam_invest.logs import log
 from sam_invest.config import CONFIG_PATH, load_config, save_watchlist
@@ -135,6 +136,11 @@ def _ratio(x, dec=2):
     return f"{x:.{dec}f}" if isinstance(x, (int, float)) else "n/d"
 
 
+def mh(container, label, value):
+    """st.metric avec tooltip (help) tire du glossaire (None si terme inconnu)."""
+    container.metric(label, value, help=glossaire.definition(label))
+
+
 def afficher_fondamentaux(ticker: str) -> None:
     """Rend la sous-partie 'Fondamentaux' selon le type (action/ETF)."""
     prof = db.get_profile(ticker)
@@ -150,35 +156,34 @@ def afficher_fondamentaux(ticker: str) -> None:
 
     if prof.get("type") == "action":
         r1 = st.columns(4)
-        r1[0].metric("Capitalisation", _money(p.get("marketCap")))
-        r1[1].metric("Secteur", p.get("sector") or "n/d")
-        r1[2].metric("PER (trailing)", _ratio(p.get("trailingPE")))
-        r1[3].metric("PER (forward)", _ratio(p.get("forwardPE")))
+        mh(r1[0], "Capitalisation", _money(p.get("marketCap")))
+        mh(r1[1], "Secteur", p.get("sector") or "n/d")
+        mh(r1[2], "PER (trailing)", _ratio(p.get("trailingPE")))
+        mh(r1[3], "PER (forward)", _ratio(p.get("forwardPE")))
         r2 = st.columns(4)
-        r2[0].metric("Price / Book", _ratio(p.get("priceToBook")))
-        r2[1].metric("Marge nette", _pct_frac(p.get("profitMargins")))
-        r2[2].metric("ROE", _pct_frac(p.get("returnOnEquity")))
-        r2[3].metric("Rendement div.", _pct_raw(p.get("dividendYield"), 2))  # deja en %
+        mh(r2[0], "Price / Book", _ratio(p.get("priceToBook")))
+        mh(r2[1], "Marge nette", _pct_frac(p.get("profitMargins")))
+        mh(r2[2], "ROE", _pct_frac(p.get("returnOnEquity")))
+        mh(r2[3], "Rendement div.", _pct_raw(p.get("dividendYield"), 2))
         r3 = st.columns(4)
-        r3[0].metric("Croissance CA", _pct_frac(p.get("revenueGrowth")))
-        r3[1].metric("Croissance BPA", _pct_frac(p.get("earningsGrowth")))
-        r3[2].metric("Dette / capitaux", _ratio(p.get("debtToEquity")))
-        r3[3].metric("Current ratio", _ratio(p.get("currentRatio")))
+        mh(r3[0], "Croissance CA", _pct_frac(p.get("revenueGrowth")))
+        mh(r3[1], "Croissance BPA", _pct_frac(p.get("earningsGrowth")))
+        mh(r3[2], "Dette / capitaux", _ratio(p.get("debtToEquity")))
+        mh(r3[3], "Current ratio", _ratio(p.get("currentRatio")))
         r4 = st.columns(4)
-        r4[0].metric("Free cash flow", _money(p.get("freeCashflow")))
-        r4[1].metric("Objectif moyen", _ratio(p.get("targetMeanPrice")))
+        mh(r4[0], "Free cash flow", _money(p.get("freeCashflow")))
+        mh(r4[1], "Objectif moyen", _ratio(p.get("targetMeanPrice")))
         tgt, cur = p.get("targetMeanPrice"), p.get("currentPrice")
-        if isinstance(tgt, (int, float)) and isinstance(cur, (int, float)) and cur:
-            r4[2].metric("Potentiel", f"{(tgt / cur - 1) * 100:+.1f}%")
-        else:
-            r4[2].metric("Potentiel", "n/d")
+        pot = (f"{(tgt / cur - 1) * 100:+.1f}%"
+               if (isinstance(tgt, (int, float)) and isinstance(cur, (int, float)) and cur) else "n/d")
+        mh(r4[2], "Potentiel", pot)
     else:  # ETF
         r1 = st.columns(4)
-        r1[0].metric("Categorie", p.get("category") or "n/d")
-        r1[1].metric("Encours", _money(p.get("totalAssets")))
-        r1[2].metric("Frais (TER)", _pct_raw(p.get("expenseRatio"), 2))
-        r1[3].metric("Rendement", _pct_frac(p.get("yield")))
-        st.metric("Perf YTD", _pct_raw(p.get("ytdReturn"), 1))
+        mh(r1[0], "Categorie", p.get("category") or "n/d")
+        mh(r1[1], "Encours", _money(p.get("totalAssets")))
+        mh(r1[2], "Frais (TER)", _pct_raw(p.get("expenseRatio"), 2))
+        mh(r1[3], "Rendement", _pct_frac(p.get("yield")))
+        mh(st, "Perf YTD", _pct_raw(p.get("ytdReturn"), 1))
         top = p.get("top_holdings") or []
         if top:
             st.markdown("**Principales lignes :**")
@@ -297,12 +302,15 @@ with tab_donnees:
             "Tendance": s.tendance,
         }
 
+    _g = glossaire.definition
     _num_cfg = {
-        "Cours": st.column_config.NumberColumn(format="%.2f"),
-        "Seance %": st.column_config.NumberColumn(format="%.1f"),
-        "Drawdown 52s %": st.column_config.NumberColumn(format="%.1f"),
-        "Position 52s %": st.column_config.NumberColumn(format="%.0f"),
-        "RSI 14": st.column_config.NumberColumn(format="%.0f"),
+        "Cours": st.column_config.NumberColumn(format="%.2f", help=_g("Cours")),
+        "Seance %": st.column_config.NumberColumn(format="%.1f", help=_g("Seance")),
+        "Drawdown 52s %": st.column_config.NumberColumn(format="%.1f", help=_g("Drawdown 52s")),
+        "Position 52s %": st.column_config.NumberColumn(format="%.0f", help=_g("Position 52s")),
+        "RSI 14": st.column_config.NumberColumn(format="%.0f", help=_g("RSI 14")),
+        "Etat RSI": st.column_config.TextColumn(help=_g("Etat RSI")),
+        "Tendance": st.column_config.TextColumn(help=_g("Tendance")),
     }
 
     if snaps:
@@ -356,11 +364,14 @@ with tab_donnees:
             st.dataframe(
                 pd.DataFrame(est_rows), use_container_width=True, hide_index=True,
                 column_config={
-                    "Revisions 30j (net)": st.column_config.NumberColumn(format="%.0f"),
+                    "Revisions 30j (net)": st.column_config.NumberColumn(
+                        format="%.0f", help=glossaire.definition("Revisions")),
                     "Hausses": st.column_config.NumberColumn(format="%.0f"),
                     "Baisses": st.column_config.NumberColumn(format="%.0f"),
-                    "Obj. cours moyen": st.column_config.NumberColumn(format="%.2f"),
-                    "Potentiel %": st.column_config.NumberColumn(format="%.1f"),
+                    "Obj. cours moyen": st.column_config.NumberColumn(
+                        format="%.2f", help=glossaire.definition("Objectif")),
+                    "Potentiel %": st.column_config.NumberColumn(
+                        format="%.1f", help=glossaire.definition("Potentiel")),
                 },
             )
         st.caption("Revisions 30j (net) = analystes relevant l'EPS − ceux l'abaissant (negatif = "
@@ -387,11 +398,11 @@ with tab_donnees:
 
             ind = indicateurs_ligne(choix)
             ci = st.columns(5)
-            ci[0].metric("Dernier", _fmt(ind["last_close"]))
-            ci[1].metric("SMA 50", _fmt(ind["sma_50"]))
-            ci[2].metric("SMA 200", _fmt(ind["sma_200"]))
-            ci[3].metric("RSI 14", _fmt(ind["rsi_14"], dec=0))
-            ci[4].metric("Plus-haut 52s", _fmt(ind["high_52w"]))
+            mh(ci[0], "Dernier", _fmt(ind["last_close"]))
+            mh(ci[1], "SMA 50", _fmt(ind["sma_50"]))
+            mh(ci[2], "SMA 200", _fmt(ind["sma_200"]))
+            mh(ci[3], "RSI 14", _fmt(ind["rsi_14"], dec=0))
+            mh(ci[4], "Plus-haut 52s", _fmt(ind["high_52w"]))
         else:
             st.caption("Pas encore d'historique pour cet instrument. Lance une mise a jour des donnees.")
 
@@ -620,11 +631,11 @@ with tab_briefing:
             s = snaps_by.get(t)
             if s:
                 mc = st.columns(5)
-                mc[0].metric("Cours", _fmt(s.last_price))
-                mc[1].metric("Seance %", _fmt(s.change_pct, 1))
-                mc[2].metric("RSI 14", _fmt(s.rsi_14, 0))
-                mc[3].metric("Tendance", s.tendance)
-                mc[4].metric("Drawdown 52s", _fmt(s.drawdown_pct, 1))
+                mh(mc[0], "Cours", _fmt(s.last_price))
+                mh(mc[1], "Seance %", _fmt(s.change_pct, 1))
+                mh(mc[2], "RSI 14", _fmt(s.rsi_14, 0))
+                mh(mc[3], "Tendance", s.tendance)
+                mh(mc[4], "Drawdown 52s", _fmt(s.drawdown_pct, 1))
             # Evenements / estimations (actions)
             e = evby.get(t)
             if e and inst.type.lower() == "action":
@@ -665,13 +676,21 @@ with tab_briefing:
 # streamees par etape ; executive summary rempli en haut a la fin.
 # --------------------------------------------------------------------------
 def _rendre_etape_chiffres(etape: dict) -> None:
+    # Tableau HTML pour que chaque indicateur porte un tooltip <abbr> (definition).
     st.markdown(f"#### {etape['titre']}")
-    rows = []
+    lignes = []
     for ligne in etape["lignes"]:
         valeur = f"🚬 {ligne['valeur']}" if ligne.get("doute") else ligne["valeur"]
         src = "yfinance" if ligne["source"] == "yfinance" else "calculé"
-        rows.append({"Indicateur": ligne["label"], "Valeur": valeur, "Source": src})
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        lignes.append(
+            "<tr>"
+            f"<td style='padding:3px 16px 3px 0'>{glossaire.abbr(ligne['label'])}</td>"
+            f"<td style='padding:3px 16px;font-family:monospace;white-space:nowrap'>{valeur}</td>"
+            f"<td style='padding:3px 0;color:#8a8a8a;font-size:0.82em'>{src}</td>"
+            "</tr>"
+        )
+    st.markdown("<table style='width:100%;border-collapse:collapse'>"
+                + "".join(lignes) + "</table>", unsafe_allow_html=True)
 
 
 def _entete_diag(diag: dict) -> None:
