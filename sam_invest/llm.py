@@ -51,10 +51,11 @@ NEWS_SYSTEM = (
 
 
 def classer_news(secrets: Secrets, ticker: str, news_items: list[dict]) -> list[dict] | None:
-    """Renvoie une liste [{headline, categorie, tonalite, resume}] ou None si indispo.
+    """Renvoie [{headline, categorie, tonalite, resume, titre_fr, resume_fr}] ou None.
 
     tonalite ∈ {positif, neutre, negatif} ; categorie libre courte
     (resultats, produit, reglementaire, macro, dirigeant, autre).
+    titre_fr / resume_fr = traduction francaise du titre et du resume source.
     """
     client = _client(secrets)
     if client is None or not news_items:
@@ -67,17 +68,23 @@ def classer_news(secrets: Secrets, ticker: str, news_items: list[dict]) -> list[
     ]
     user = (
         f"Ticker concerne : {ticker}\n"
-        f"Voici des actualites recentes (JSON). Pour CHACUNE, renvoie un objet avec : "
-        f'"headline" (reprends le titre), "categorie" (un mot parmi : resultats, produit, '
-        f"reglementaire, macro, dirigeant, autre), \"tonalite\" (positif|neutre|negatif du point "
-        f'de vue de l\'entreprise), "resume" (1 phrase factuelle, sans chiffre invente).\n'
-        f"Reponds STRICTEMENT par un tableau JSON, meme ordre que l'entree.\n\n"
+        f"Voici des actualites recentes (JSON), souvent en anglais. Pour CHACUNE, renvoie un "
+        f"objet avec :\n"
+        f'- "headline" : reprends le titre ORIGINAL a l\'identique (sert a l\'alignement) ;\n'
+        f'- "categorie" : un mot parmi resultats, produit, reglementaire, macro, dirigeant, autre ;\n'
+        f'- "tonalite" : positif|neutre|negatif du point de vue de l\'entreprise ;\n'
+        f'- "resume" : 1 phrase factuelle en francais, sans chiffre invente ;\n'
+        f'- "titre_fr" : traduction francaise fidele et concise du titre ;\n'
+        f'- "resume_fr" : traduction francaise du champ resume_source (1 a 2 phrases) ; '
+        f'si resume_source est vide, mets "".\n'
+        f"Ne traduis pas les noms propres ni les tickers. Reponds STRICTEMENT par un tableau "
+        f"JSON, meme ordre que l'entree.\n\n"
         f"{json.dumps(compact, ensure_ascii=False)}"
     )
     try:
         resp = client.messages.create(
             model=secrets.model_haiku,
-            max_tokens=1500,
+            max_tokens=3000,
             system=NEWS_SYSTEM,
             messages=[{"role": "user", "content": user}],
         )
@@ -239,6 +246,93 @@ def _salvage_combine(text: str) -> dict:
             pass
         out["instruments"][key] = {"fruit": fruit.lower(), "briefing": brief}
     return out
+
+
+# ==========================================================================
+# Opus 4.8 - diagnostic financier (conclusions par etape + exec summary)
+# --------------------------------------------------------------------------
+# Streaming : le texte s'affiche au fil de l'eau (pas d'effet "tunnel").
+# Opus INTERPRETE des chiffres deja calcules par le code (diagnostic.py) ;
+# il n'en calcule ni n'en invente aucun, et ne donne pas de verdict.
+# ==========================================================================
+DIAG_ETAPE_SYSTEM = (
+    "Tu es un analyste financier pedagogue. On te donne les CHIFFRES d'une etape de "
+    "diagnostic, deja calcules par un programme. Redige une conclusion BREVE (2-3 phrases) "
+    "en francais simple : ce que ces chiffres disent de la sante de l'entreprise, les points "
+    "forts/faibles, et ce qu'il faut surveiller. "
+    "REGLES : tu n'inventes ni ne recalcules aucun chiffre (tu peux citer ceux fournis) ; "
+    "pas de verdict acheter/vendre ; reponds directement, sans preambule ni titre. "
+    "Si tu cites un chiffre dont tu n'es pas sur, ou une valeur absente des donnees fournies, "
+    "ou marquee 🚬, prefixe-la de 🚬."
+)
+
+DIAG_SUMMARY_SYSTEM = (
+    "Tu es un analyste financier. On te donne l'ensemble des chiffres d'un diagnostic "
+    "(deja calcules) et les conclusions par etape. Redige un EXECUTIVE SUMMARY en francais "
+    "clair (4 a 6 phrases) : sante globale, 2-3 points forts, 2-3 points de vigilance, et ce "
+    "qui merite le plus d'attention. "
+    "REGLES : aucun chiffre invente (cite ceux fournis) ; pas de verdict acheter/vendre ; "
+    "si tu cites un chiffre incertain ou marque 🚬, prefixe-le de 🚬 ; "
+    "termine par un rappel d'une ligne : la decision finale appartient a l'utilisateur."
+)
+
+
+def _diag_lignes_txt(lignes: list) -> str:
+    out = []
+    for ligne in lignes:
+        mark = " 🚬(douteux)" if ligne.get("doute") else ""
+        out.append(f"- {ligne['label']} : {ligne['valeur']} [{ligne['source']}]{mark}")
+    return "\n".join(out)
+
+
+def conclusion_etape_stream(secrets: Secrets, titre: str, lignes: list):
+    """Generateur de texte (streaming) : conclusion Opus 4.8 d'une etape."""
+    client = _client(secrets)
+    if client is None:
+        yield "(Conclusion indisponible : cle Claude absente.)"
+        return
+    user = f"Etape : {titre}\nChiffres :\n{_diag_lignes_txt(lignes)}\n\nRedige la conclusion."
+    try:
+        with client.messages.stream(
+            model=secrets.model_opus,
+            max_tokens=500,
+            system=DIAG_ETAPE_SYSTEM,
+            messages=[{"role": "user", "content": user}],
+        ) as stream:
+            for chunk in stream.text_stream:
+                yield chunk
+    except Exception as e:
+        yield f"(Conclusion indisponible : {e})"
+
+
+def exec_summary_diagnostic_stream(secrets: Secrets, diag: dict, conclusions: dict):
+    """Generateur (streaming) : executive summary Opus 4.8 de tout le diagnostic."""
+    client = _client(secrets)
+    if client is None:
+        yield "(Synthese indisponible : cle Claude absente.)"
+        return
+    blocs = []
+    for etape in diag.get("etapes", []):
+        concl = conclusions.get(etape["id"], "")
+        blocs.append(f"## {etape['titre']}\n{_diag_lignes_txt(etape['lignes'])}\n"
+                     f"Conclusion : {concl}")
+    corps = "\n\n".join(blocs)
+    note = diag.get("note_fiabilite")
+    entete = f"Entreprise : {diag.get('nom')} ({diag.get('ticker')})."
+    if note:
+        entete += f"\n{note}"
+    user = f"{entete}\n\n{corps}\n\nRedige l'executive summary."
+    try:
+        with client.messages.stream(
+            model=secrets.model_opus,
+            max_tokens=1200,
+            system=DIAG_SUMMARY_SYSTEM,
+            messages=[{"role": "user", "content": user}],
+        ) as stream:
+            for chunk in stream.text_stream:
+                yield chunk
+    except Exception as e:
+        yield f"(Synthese indisponible : {e})"
 
 
 def _strip_code_fence(text: str) -> str:

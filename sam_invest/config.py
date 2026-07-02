@@ -32,6 +32,7 @@ class Secrets:
     anthropic_api_key: str = ""
     model_haiku: str = "claude-haiku-4-5"
     model_sonnet: str = "claude-sonnet-4-6"
+    model_opus: str = "claude-opus-4-8"
     finnhub_api_key: str = ""
     fmp_api_key: str = ""
 
@@ -160,6 +161,7 @@ def load_secrets() -> Secrets:
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", "").strip(),
         model_haiku=os.getenv("CLAUDE_MODEL_HAIKU", "claude-haiku-4-5").strip(),
         model_sonnet=os.getenv("CLAUDE_MODEL_SONNET", "claude-sonnet-4-6").strip(),
+        model_opus=os.getenv("CLAUDE_MODEL_OPUS", "claude-opus-4-8").strip(),
         finnhub_api_key=os.getenv("FINNHUB_API_KEY", "").strip(),
         fmp_api_key=os.getenv("FMP_API_KEY", "").strip(),
     )

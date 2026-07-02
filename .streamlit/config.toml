@@ -1,0 +1,9 @@
+# Theme natif Streamlit : couleurs sombres "vert dollar" (cf. DESIGN_SYSTEM_PROMPT.md).
+# Volontairement minimal : couleurs de fond + texte uniquement, aucun CSS custom.
+[theme]
+base = "dark"
+primaryColor = "#2FAE72"            # accents (boutons, liens, selection)
+backgroundColor = "#14181A"         # fond principal
+secondaryBackgroundColor = "#1C2226"  # cartes, widgets, sidebar
+textColor = "#ECEFEE"               # texte
+font = "sans serif"

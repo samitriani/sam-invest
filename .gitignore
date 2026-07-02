@@ -14,3 +14,6 @@ __pycache__/
 .venv/
 venv/
 .streamlit/secrets.toml
+
+# Note de travail (non versionnee)
+context.md

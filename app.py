@@ -25,12 +25,23 @@ import streamlit as st
 from sam_invest import db, delta, llm, signals
 from sam_invest.briefing import construire_briefing, indicateurs_ligne
 from sam_invest.data_sources import search_instruments
+from sam_invest.diagnostic import construire_diagnostic
 from sam_invest.events import construire_evenements
 from sam_invest.logs import log
 from sam_invest.config import CONFIG_PATH, load_config, save_watchlist
 from sam_invest.update import update_donnees, update_global, update_news
 
 st.set_page_config(page_title="Sam_Invest", page_icon="📊", layout="wide")
+
+# Touche de police minimale : chiffres/valeurs en monospace (IBM Plex Mono).
+# Volontairement reduit a 2 selecteurs, sans transition ni mise en page (perf safe).
+st.markdown(
+    "<style>"
+    "@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500&display=swap');"
+    "code, [data-testid=\"stMetricValue\"]{font-family:'IBM Plex Mono','Courier New',monospace;}"
+    "</style>",
+    unsafe_allow_html=True,
+)
 
 config = load_config()
 db.init_db()
@@ -183,14 +194,16 @@ def afficher_fondamentaux(ticker: str) -> None:
 
 
 def rendre_news(n: dict, a: dict | None = None, compact: bool = False) -> None:
-    """Affiche une news : titre (+ categorie/tonalite si analysee par Haiku),
-    resume source (mode complet), et lien proeminent vers l'article."""
+    """Affiche une news : titre (traduit FR si dispo) + categorie/tonalite,
+    resume source traduit (mode complet), et lien vers l'article original."""
     head = n.get("headline", "")
+    # Titre francais si Haiku l'a traduit, sinon le titre original.
+    titre = ((a.get("titre_fr") or "").strip() if a else "") or head
     if a:
         emoji = {"positif": "🟢", "negatif": "🔴"}.get(a.get("tonalite", "neutre"), "⚪")
-        st.markdown(f"{emoji} **[{a.get('categorie', 'autre')}]** {head}")
+        st.markdown(f"{emoji} **[{a.get('categorie', 'autre')}]** {titre}")
     else:
-        st.markdown(f"• {head}" if compact else f"**{head}**")
+        st.markdown(f"• {titre}" if compact else f"**{titre}**")
 
     meta = []
     if n.get("datetime"):
@@ -200,7 +213,10 @@ def rendre_news(n: dict, a: dict | None = None, compact: bool = False) -> None:
     meta_txt = " · ".join(meta)
 
     if not compact:
-        resume = (n.get("summary") or "").strip()
+        # Resume source traduit en priorite, sinon le resume source original,
+        # sinon le resume d'une phrase de Haiku.
+        resume_fr = (a.get("resume_fr") or "").strip() if a else ""
+        resume = resume_fr or (n.get("summary") or "").strip()
         if resume:
             st.write(resume if len(resume) <= 500 else resume[:500].rstrip() + "…")
         elif a and a.get("resume"):
@@ -208,7 +224,7 @@ def rendre_news(n: dict, a: dict | None = None, compact: bool = False) -> None:
 
     if n.get("url"):
         suffix = f"  ·  _{meta_txt}_" if meta_txt else ""
-        st.markdown(f"🔗 [Lire l'article complet]({n['url']}){suffix}")
+        st.markdown(f"🔗 [Lire l'article original]({n['url']}){suffix}")
     elif meta_txt:
         st.caption(meta_txt)
 
@@ -245,8 +261,8 @@ if btn_global:
 # ==========================================================================
 # Onglets
 # ==========================================================================
-tab_donnees, tab_news, tab_briefing, tab_edit = st.tabs(
-    ["📈 Donnees", "📰 News", "🧠 Briefing", "✏️ Watchlist"]
+tab_donnees, tab_news, tab_briefing, tab_diag, tab_edit = st.tabs(
+    ["📈 Donnees", "📰 News", "🧠 Briefing", "🔬 Diagnostic", "✏️ Watchlist"]
 )
 
 
@@ -642,6 +658,115 @@ with tab_briefing:
                 st.markdown("**News recentes :**")
                 for n in raw[:4]:
                     rendre_news(n, analyses.get(n.get("headline", "")), compact=True)
+
+# --------------------------------------------------------------------------
+# ONGLET DIAGNOSTIC : analyse financiere (chiffres = code, conclusions = Opus 4.8)
+# Affichage PROGRESSIF (pas d'effet tunnel) : chiffres instantanes + conclusions
+# streamees par etape ; executive summary rempli en haut a la fin.
+# --------------------------------------------------------------------------
+def _rendre_etape_chiffres(etape: dict) -> None:
+    st.markdown(f"#### {etape['titre']}")
+    rows = []
+    for ligne in etape["lignes"]:
+        valeur = f"🚬 {ligne['valeur']}" if ligne.get("doute") else ligne["valeur"]
+        src = "yfinance" if ligne["source"] == "yfinance" else "calculé"
+        rows.append({"Indicateur": ligne["label"], "Valeur": valeur, "Source": src})
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+
+def _entete_diag(diag: dict) -> None:
+    st.subheader(f"{diag.get('nom')} ({diag.get('ticker')})"
+                 + (f" · {diag['devise']}" if diag.get("devise") else ""))
+    annee, dref = diag.get("annee"), diag.get("date_reference")
+    exo = (f"Exercice {annee}" + (f" (cloture {dref})" if dref else "")) if annee else (dref or "date n/d")
+    h = diag.get("hypotheses", {})
+    st.caption(f"📅 Chiffres : **{exo}** (source yfinance). "
+               f"WACC estime : taux sans risque {h.get('taux_sans_risque', 0) * 100:.1f}% · "
+               f"prime {h.get('prime_marche', 0) * 100:.1f}% · "
+               f"beta {h.get('beta') if h.get('beta') is not None else 'n/d'}. "
+               "Colonne « Source » : yfinance (brut) / calculé (formule) ; conclusions = LLM (Opus 4.8). "
+               "🚬 = chiffre douteux (aberration ou change).")
+    if diag.get("note_fiabilite"):
+        st.warning(diag["note_fiabilite"])
+
+
+def _rendre_diag_statique(r: dict) -> None:
+    diag = r["diag"]
+    _entete_diag(diag)
+    st.markdown("### Executive summary")
+    st.caption("🤖 LLM · Claude Opus 4.8")
+    st.markdown(r.get("resume") or "")
+    st.divider()
+    for etape in diag["etapes"]:
+        _rendre_etape_chiffres(etape)
+        concl = r["conclusions"].get(etape["id"])
+        if concl:
+            st.caption("🤖 Conclusion — LLM · Claude Opus 4.8")
+            st.markdown(concl)
+
+
+with tab_diag:
+    st.markdown("**Diagnostic financier** — cherche une entreprise, selectionne-la, puis "
+                "**Analyse**. Les chiffres sont calcules par du code (colonne « Source ») ; "
+                "Claude Opus 4.8 redige une conclusion par etape + un executive summary. "
+                "_Actions uniquement._")
+    if not config.secrets.anthropic_api_key:
+        st.info("ANTHROPIC_API_KEY absente : le diagnostic necessite Claude Opus 4.8.")
+
+    # Etape 1 : recherche (le formulaire => Entree declenche la recherche).
+    with st.form("form_diag", clear_on_submit=False):
+        fc1, fc2 = st.columns([4, 1])
+        q_diag = fc1.text_input("Ticker ou nom", key="diag_q", label_visibility="collapsed",
+                                placeholder="ex : NVDA, Alibaba, ASML...")
+        rechercher = fc2.form_submit_button("Rechercher", use_container_width=True)
+    if rechercher and q_diag.strip():
+        with st.spinner("Recherche (Yahoo)..."):
+            st.session_state["diag_results"] = search_instruments(q_diag.strip(), max_results=8)
+
+    # Etape 2 : selection + bouton Analyser.
+    analyser, ticker_sel = False, None
+    results = st.session_state.get("diag_results")
+    if results:
+        opts = {f"{r['symbol']} — {r['nom']} ({r['bourse']}, {r['type']})": r["symbol"]
+                for r in results}
+        pick = st.selectbox("Selectionne l'entreprise a analyser", list(opts.keys()), key="diag_pick")
+        ticker_sel = opts.get(pick)
+        analyser = st.button("Analyser", use_container_width=True,
+                             disabled=not config.secrets.anthropic_api_key or not ticker_sel)
+    elif results == []:
+        st.caption("Aucun resultat. Essaie un autre nom, ou le ticker exact (ex : NVDA).")
+
+    # Etape 3 : analyse (affichage progressif) ou rendu du dernier diagnostic.
+    if analyser and ticker_sel:
+        with st.spinner("Recuperation des etats financiers..."):
+            diag = construire_diagnostic(config, ticker_sel)
+        if "erreur" in diag:
+            st.error(diag["erreur"])
+            st.session_state["diag_result"] = None
+        else:
+            _entete_diag(diag)
+            summary_ph = st.empty()  # exec summary EN HAUT, rempli a la fin
+            summary_ph.info("Executive summary : genere apres les etapes ci-dessous...")
+            st.divider()
+            conclusions = {}
+            for etape in diag["etapes"]:
+                _rendre_etape_chiffres(etape)
+                st.caption("🤖 Conclusion — LLM · Claude Opus 4.8")
+                conclusions[etape["id"]] = st.write_stream(
+                    llm.conclusion_etape_stream(config.secrets, etape["titre"], etape["lignes"])
+                )
+            with summary_ph.container():
+                st.markdown("### Executive summary")
+                st.caption("🤖 LLM · Claude Opus 4.8")
+                resume = st.write_stream(
+                    llm.exec_summary_diagnostic_stream(config.secrets, diag, conclusions)
+                )
+            st.session_state["diag_result"] = {
+                "diag": diag, "conclusions": conclusions, "resume": resume,
+            }
+    elif st.session_state.get("diag_result"):
+        _rendre_diag_statique(st.session_state["diag_result"])
+
 
 # --------------------------------------------------------------------------
 # ONGLET WATCHLIST : edition simple (ajouter / retirer / modifier des lignes)

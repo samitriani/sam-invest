@@ -491,6 +491,40 @@ def fetch_events_estimates(ticker: str) -> dict | None:
 
 
 # ==========================================================================
+# ETATS FINANCIERS (diagnostic)  --  yfinance
+# --------------------------------------------------------------------------
+# Compte de resultat + bilan + cash-flow (annuels, ~5 ans) + info. Sert au
+# diagnostic financier ; les ratios sont calcules par du code (diagnostic.py),
+# jamais par un LLM. Renvoie None si les etats sont indisponibles.
+# ==========================================================================
+def fetch_etats_financiers(ticker: str) -> dict | None:
+    if yf is None:
+        return None
+    try:
+        tk = yf.Ticker(ticker)
+        inc = tk.income_stmt
+        bal = tk.balance_sheet
+        cf = tk.cashflow
+        try:
+            info = tk.info or {}
+        except Exception:
+            info = {}
+        if inc is None or getattr(inc, "empty", True) or bal is None or getattr(bal, "empty", True):
+            return None
+        return {
+            "income": inc,
+            "balance": bal,
+            "cashflow": cf,
+            "info": info,
+            "devise_etats": info.get("financialCurrency"),
+            "devise_cotation": info.get("currency"),
+            "nom": info.get("longName") or info.get("shortName") or ticker,
+        }
+    except Exception:
+        return None
+
+
+# ==========================================================================
 # PROFIL / FONDAMENTAUX D'AFFICHAGE  --  yfinance (.info + .funds_data)
 # --------------------------------------------------------------------------
 # Set focalise pour l'onglet "Donnees par instrument". Actions = ratios
