@@ -41,14 +41,27 @@ plus-haut/plus-bas 52 semaines, variation seance, drawdown.
 
 ## Installation (une seule fois)
 
+> `config.yaml`, `.env` et `data/sam_invest.db` sont **personnels** : ils ne sont
+> jamais versionnes sur GitHub (voir `.gitignore`). Si tu recuperes ce depot pour
+> la premiere fois (clone / fork / telechargement ZIP), ces 3 elements
+> n'existent pas encore chez toi — les etapes ci-dessous les creent.
+
 1. **Double-clique sur `install.bat`** (cree l'environnement `.venv` et installe tout).
-2. **Configure ta watchlist** : un `config.yaml` **pre-rempli avec 20 instruments**
-   (10 actions + 10 ETF, Tech & emergents) est fourni. Edite-le librement
-   (ajoute/retire/modifie les lignes). Doc detaillee dans `config.template.yaml`.
-3. **Configure tes cles** : copie `.env.example` en `.env` et renseigne :
-   - `ANTHROPIC_API_KEY` (pour la synthese Claude — facultatif, sinon seuls les
-     chiffres s'affichent),
-   - `FINNHUB_API_KEY` et/ou `FMP_API_KEY` (facultatif, repli pour les donnees).
+2. **Configure ta watchlist** : copie `config.template.yaml` en `config.yaml`
+   (le template contient deja 20 instruments pre-remplis : 10 actions + 10 ETF,
+   Tech & emergents — garde-les tels quels ou edite librement). Doc detaillee
+   en commentaires dans le fichier.
+3. **Configure ta cle Claude (obligatoire)** : copie `.env.example` en `.env`,
+   puis renseigne `ANTHROPIC_API_KEY` :
+   - Cree une cle sur [console.anthropic.com](https://console.anthropic.com/settings/keys)
+     (necessite un compte + credit/carte enregistree).
+   - Colle-la dans `.env` : `ANTHROPIC_API_KEY=sk-ant-...`
+   - Sans cle, l'app se lance mais **News, Briefing et Diagnostic sont
+     desactives** (Onglet Donnees seul reste utilisable).
+   - `FINNHUB_API_KEY` / `FMP_API_KEY` restent **facultatives** (repli si
+     yfinance echoue) : laisse-les vides pour demarrer, tu peux y revenir plus tard.
+4. La base **`data/sam_invest.db`** (historique/cache) se **cree automatiquement**
+   au premier lancement : rien a faire.
 
 Apres ca, **plus jamais de ligne de commande**.
 
