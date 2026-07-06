@@ -8,7 +8,10 @@ Role strictement limite :
 Garde-fous (rappeles dans les prompts) :
   - Claude ne calcule ni n'invente AUCUN chiffre (prix, ratio, %, valeur).
     Il ne fait que reformuler les chiffres qu'on lui donne.
-  - Claude ne donne JAMAIS de verdict acheter/vendre/conserver.
+  - Les recommandations (briefing et exec summary du diagnostic) utilisent le
+    code "fruit" (concombre=acheter, orange=maintenir, tomate=vendre) et sont
+    toujours accompagnees d'un rappel : ceci n'est pas un conseil en
+    investissement.
 
 Si la cle ANTHROPIC_API_KEY est absente ou l'appel echoue, les fonctions
 renvoient une valeur de repli (None / texte d'indisponibilite) sans planter.
@@ -253,7 +256,8 @@ def _salvage_combine(text: str) -> dict:
 # --------------------------------------------------------------------------
 # Streaming : le texte s'affiche au fil de l'eau (pas d'effet "tunnel").
 # Opus INTERPRETE des chiffres deja calcules par le code (diagnostic.py) ;
-# il n'en calcule ni n'en invente aucun, et ne donne pas de verdict.
+# il n'en calcule ni n'en invente aucun. Pas de verdict par etape ; seul
+# l'executive summary se termine par une preconisation argumentee.
 # ==========================================================================
 DIAG_ETAPE_SYSTEM = (
     "Tu es un analyste financier pedagogue. On te donne les CHIFFRES d'une etape de "
@@ -271,9 +275,17 @@ DIAG_SUMMARY_SYSTEM = (
     "(deja calcules) et les conclusions par etape. Redige un EXECUTIVE SUMMARY en francais "
     "clair (4 a 6 phrases) : sante globale, 2-3 points forts, 2-3 points de vigilance, et ce "
     "qui merite le plus d'attention. "
-    "REGLES : aucun chiffre invente (cite ceux fournis) ; pas de verdict acheter/vendre ; "
+    "Ensuite, sur une ligne a part, donne ta PRECONISATION codee par un fruit (meme code que "
+    "le briefing) : 🥒 concombre = ACHETER, 🍊 orange = MAINTENIR, 🍅 tomate = VENDRE. "
+    "Format exact : « **Preconisation : <emoji> <fruit> (<Acheter|Maintenir|Vendre>)** » "
+    "suivi de 2-3 phrases qui expliquent ta position en t'appuyant uniquement sur les "
+    "chiffres et conclusions fournis (creation de valeur ROIC vs WACC, marges, endettement, "
+    "generation de cash, valorisation) ; si les signaux sont contradictoires, dis-le et "
+    "explique ce qui ferait pencher la balance d'un cote ou de l'autre. "
+    "REGLES : aucun chiffre invente (cite ceux fournis) ; "
     "si tu cites un chiffre incertain ou marque 🚬, prefixe-le de 🚬 ; "
-    "termine par un rappel d'une ligne : la decision finale appartient a l'utilisateur."
+    "termine par un rappel d'une ligne : ceci n'est pas un conseil en investissement, "
+    "la decision finale appartient a l'utilisateur."
 )
 
 

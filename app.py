@@ -727,7 +727,8 @@ def _rendre_diag_statique(r: dict) -> None:
 with tab_diag:
     st.markdown("**Diagnostic financier** — cherche une entreprise, selectionne-la, puis "
                 "**Analyse**. Les chiffres sont calcules par du code (colonne « Source ») ; "
-                "Claude Opus 4.8 redige une conclusion par etape + un executive summary. "
+                "Claude Opus 4.8 redige une conclusion par etape + un executive summary "
+                "avec preconisation argumentee (🥒 acheter / 🍊 maintenir / 🍅 vendre). "
                 "_Actions uniquement._")
     if not config.secrets.anthropic_api_key:
         st.info("ANTHROPIC_API_KEY absente : le diagnostic necessite Claude Opus 4.8.")
