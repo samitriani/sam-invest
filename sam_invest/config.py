@@ -70,10 +70,6 @@ class AppConfig:
     def news(self) -> dict:
         return self.raw.get("news", {"max_par_ticker": 10, "anciennete_max_jours": 14})
 
-    @property
-    def briefing(self) -> dict:
-        return self.raw.get("briefing", {"delta_variation_notable_pct": 3})
-
     def actions(self) -> list[Instrument]:
         return [i for i in self.watchlist if i.type.lower() == "action"]
 

@@ -82,14 +82,16 @@ pour maitriser la consommation d'API Claude :
   ETF : categorie, encours, TER, rendement, perf YTD, top holdings).
 - **📰 News** _(Claude Haiku)_ : recupere et classe les news. Affiche les news par
   instrument (brutes toujours visibles, enrichies si analysees).
-- **🧠 Briefing** _(Claude Sonnet, a la demande)_ : une section **🌍 Global**
-  (delta **« Depuis ta derniere visite »** + bouton « Marquer comme vu » + vue
-  d'ensemble big-picture + recap des recos) puis une section **📋 Par instrument**.
-  Chaque volet combine l'**interpretation** en langage simple (briefing pedagogique,
-  sans reciter les chiffres) ET une **recommandation codee par un fruit** —
-  🥒 concombre = acheter, 🍊 orange = maintenir, 🍅 tomate = vendre. Un seul appel
-  Sonnet couvre le global ET tous les instruments. Un avertissement rappelle que la
-  reco est une heuristique du LLM, **pas un conseil financier** — la decision reste
+- **🧠 Briefing** _(Claude Sonnet, a la demande)_ : reprend le contenu des onglets
+  **Donnees** et **News** ; si l'un des deux date de plus de 2 h (ou n'a jamais ete
+  recupere), un message invite a le rafraichir avant de generer. Une section
+  **🌍 Global** (vue d'ensemble big-picture + recap des recos) puis une section
+  **📋 Par instrument**. Chaque volet donne un briefing en **3 parties** —
+  **📊 analyse des chiffres** (onglet Donnees), **📰 analyse des news** (onglet News),
+  **🎯 conclusion & arguments** — accompagnees d'une **recommandation codee par un
+  fruit** : 🥒 concombre = acheter, 🍊 orange = maintenir, 🍅 tomate = vendre. Un seul
+  appel Sonnet couvre le global ET tous les instruments. Un avertissement rappelle que
+  la reco est une heuristique du LLM, **pas un conseil financier** — la decision reste
   humaine.
 - **✏️ Watchlist** : **recherche par nom** (« air liquide » → `AI.PA`) via Yahoo,
   sans connaitre les tickers ; + edition directe de la liste. Enregistree dans

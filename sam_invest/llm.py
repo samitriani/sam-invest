@@ -110,12 +110,19 @@ SYNTHESE_SYSTEM = (
     "pays emergents). On te fournit un ETAT DE FAIT deja chiffre par un programme (cours, "
     "variations, signaux techniques, flags de regles, evenements, revisions d'estimations, "
     "news resumees). "
-    "Pour CHAQUE instrument tu produis DEUX choses : "
-    "(A) un BRIEFING en langage simple ; (B) une RECOMMANDATION codee par un fruit : "
-    "'concombre'=ACHETER, 'orange'=MAINTENIR, 'tomate'=VENDRE. "
+    "Pour CHAQUE instrument tu produis un BRIEFING STRUCTURE EN 3 PARTIES plus une "
+    "RECOMMANDATION codee par un fruit ('concombre'=ACHETER, 'orange'=MAINTENIR, "
+    "'tomate'=VENDRE) : "
+    "(A) 'analyse_chiffres' : ce que disent les chiffres de l'onglet Donnees (cours, "
+    "variations, tendance SMA, RSI, drawdown, fondamentaux, evenements et revisions "
+    "d'estimations) ; "
+    "(B) 'analyse_news' : ce que racontent les news recentes de l'instrument (news_resumees) "
+    "et ce qu'elles impliquent ; s'il n'y a pas de news, dis-le en une phrase ; "
+    "(C) 'conclusion' : ta conclusion et tes arguments, qui font la SYNTHESE des deux "
+    "analyses ci-dessus et JUSTIFIENT explicitement le fruit choisi. "
     "REGLES STRICTES : "
     "(1) Tu n'inventes, ne calcules ni ne modifies AUCUN chiffre. "
-    "(2) Le BRIEFING NE RECITE PAS les chiffres bruts (deja affiches a l'ecran) : il EXPLIQUE "
+    "(2) Tu NE RECITES PAS les chiffres bruts (deja affiches a l'ecran) : tu EXPLIQUES "
     "ce qu'ils veulent dire. Vulgarisation maximale, comme a ta grand-mere, sans jargon non "
     "traduit. Exemples : 'RSI 37, neutre' -> 'le titre n'est ni surchauffe ni brade' ; "
     "'drawdown -18%' -> 'il a perdu 18% depuis son plus haut de l'annee' ; 'cours sous la "
@@ -123,9 +130,10 @@ SYNTHESE_SYSTEM = (
     "'revisions d'EPS positives' -> 'de plus en plus d'analystes relevent leurs previsions de "
     "benefices, signe de confiance'. "
     "(3) Dis ce que la situation IMPLIQUE et CE QU'IL FAUT SURVEILLER. Signale simplement les "
-    "contradictions de signaux (ex: tendance de fond positive mais forte dette). "
-    "(4) La RECOMMANDATION (fruit) doit decouler des signaux fournis et rester coherente avec "
-    "le briefing (le briefing justifie implicitement le fruit). "
+    "contradictions de signaux (ex: tendance de fond positive mais forte dette, ou chiffres "
+    "solides mais news inquietantes). "
+    "(4) La RECOMMANDATION (fruit) doit decouler des chiffres ET des news, et rester coherente "
+    "avec la conclusion. "
     "Style : francais simple, phrases courtes, ton chaleureux et concret."
 )
 
@@ -150,13 +158,17 @@ def synthese_et_reco(secrets: Secrets, donnees_briefing: dict) -> dict | None:
         "Voici l'etat de fait chiffre de la watchlist (JSON). Reponds STRICTEMENT en JSON avec "
         "exactement deux cles :\n"
         "- \"global\" : 3 a 4 phrases de vue d'ensemble en langage simple (ambiance generale + "
-        "1-2 points d'attention). Si 'delta_depuis_derniere_visite' n'est pas vide, COMMENCE "
-        "par expliquer ce qui a change depuis la derniere visite.\n"
+        "1-2 points d'attention).\n"
         "- \"instruments\" : un objet {\"<ticker>\": {\"fruit\": \"concombre|orange|tomate\", "
-        "\"briefing\": \"<1 a 2 phrases d'interpretation simple>\"}} couvrant CHAQUE ticker du "
-        "champ 'instruments', avec les cles dans cet ordre (fruit puis briefing). Le briefing "
-        "interprete la situation pour un debutant (sans reciter les chiffres) et justifie "
-        "implicitement le fruit. Reste bref pour que la reponse tienne en entier.\n"
+        "\"analyse_chiffres\": \"<...>\", \"analyse_news\": \"<...>\", \"conclusion\": "
+        "\"<...>\"}} couvrant CHAQUE ticker du champ 'instruments', avec les cles dans cet "
+        "ordre EXACT (fruit, puis analyse_chiffres, puis analyse_news, puis conclusion). "
+        "'analyse_chiffres' = 2 a 3 phrases interpretant les chiffres de l'instrument (cours, "
+        "tendance, RSI, drawdown, fondamentaux, evenements/revisions). 'analyse_news' = 2 a 3 "
+        "phrases sur les news recentes (news_resumees) et leur portee ; s'il n'y en a pas, une "
+        "seule phrase le disant. 'conclusion' = 2 a 3 phrases de synthese qui justifient le "
+        "fruit. N'ecris pas les chiffres bruts, EXPLIQUE-les. Reste concis pour que la reponse "
+        "tienne en entier.\n"
         "Ne renvoie que le JSON, sans texte autour.\n\n"
         f"{json.dumps(donnees_briefing, ensure_ascii=False, default=str)}"
     )
@@ -164,7 +176,7 @@ def synthese_et_reco(secrets: Secrets, donnees_briefing: dict) -> dict | None:
     try:
         resp = client.messages.create(
             model=secrets.model_sonnet,
-            max_tokens=8000,
+            max_tokens=16000,
             system=SYNTHESE_SYSTEM,
             messages=[{"role": "user", "content": user}],
         )
@@ -207,22 +219,27 @@ def synthese_et_reco(secrets: Secrets, donnees_briefing: dict) -> dict | None:
 
 
 def _normaliser_instruments(raw: dict) -> dict:
-    """Garantit que chaque entree est {'fruit': str, 'briefing': str}."""
+    """Garantit que chaque entree est {fruit, analyse_chiffres, analyse_news, conclusion}."""
     out = {}
     for t, v in raw.items():
         if isinstance(v, dict):
-            out[t] = {"fruit": str(v.get("fruit", "") or "").lower(),
-                      "briefing": v.get("briefing", "") or ""}
+            out[t] = {
+                "fruit": str(v.get("fruit", "") or "").lower(),
+                "analyse_chiffres": v.get("analyse_chiffres", "") or "",
+                "analyse_news": v.get("analyse_news", "") or "",
+                "conclusion": v.get("conclusion", "") or "",
+            }
         else:  # tolerance si le modele renvoie juste un texte
-            out[t] = {"fruit": "", "briefing": str(v)}
+            out[t] = {"fruit": "", "analyse_chiffres": "", "analyse_news": "",
+                      "conclusion": str(v)}
     return out
 
 
 def _salvage_combine(text: str) -> dict:
-    """Recupere autant que possible d'un JSON {global, instruments:{t:{fruit,briefing}}} tronque.
+    """Recupere autant que possible d'un JSON {global, instruments:{t:{...}}} tronque.
 
-    Extrait 'global' et tous les blocs "TICKER": {"fruit": "...", "briefing": "..."} COMPLETS
-    (l'entree coupee en fin de reponse est ignoree).
+    Extrait 'global' et tous les blocs "TICKER": {fruit, analyse_chiffres, analyse_news,
+    conclusion} COMPLETS (l'entree coupee en fin de reponse est ignoree).
     """
     out: dict = {"global": "", "instruments": {}}
 
@@ -233,21 +250,30 @@ def _salvage_combine(text: str) -> dict:
         except Exception:
             out["global"] = mg.group(1)
 
+    def _unescape(s: str) -> str:
+        try:
+            return json.loads('"' + s + '"')
+        except Exception:
+            return s
+
     bloc = re.compile(
         r'"([A-Za-z0-9.\^\-]{1,15})"\s*:\s*\{\s*'
         r'"fruit"\s*:\s*"((?:[^"\\]|\\.)*)"\s*,\s*'
-        r'"briefing"\s*:\s*"((?:[^"\\]|\\.)*)"\s*\}',
+        r'"analyse_chiffres"\s*:\s*"((?:[^"\\]|\\.)*)"\s*,\s*'
+        r'"analyse_news"\s*:\s*"((?:[^"\\]|\\.)*)"\s*,\s*'
+        r'"conclusion"\s*:\s*"((?:[^"\\]|\\.)*)"\s*\}',
         re.DOTALL,
     )
     for m in bloc.finditer(text):
-        key, fruit, brief = m.group(1), m.group(2), m.group(3)
+        key = m.group(1)
         if key in ("global", "instruments"):
             continue
-        try:
-            brief = json.loads('"' + brief + '"')
-        except Exception:
-            pass
-        out["instruments"][key] = {"fruit": fruit.lower(), "briefing": brief}
+        out["instruments"][key] = {
+            "fruit": m.group(2).lower(),
+            "analyse_chiffres": _unescape(m.group(3)),
+            "analyse_news": _unescape(m.group(4)),
+            "conclusion": _unescape(m.group(5)),
+        }
     return out
 
 

@@ -55,7 +55,7 @@ toujours accompagné d'une définition (tooltips glossaire). Langue : **françai
 - **Front** : React 18 + Vite + TypeScript, Tailwind CSS, shadcn/ui, TanStack Query
   (data fetching/cache), Recharts (graphiques). SPA, pas de SSR.
 - **Back** : FastAPI qui enveloppe le package `sam_invest/` existant
-  (data_sources, signals, indicators, rules, briefing, delta, diagnostic, llm, db).
+  (data_sources, signals, indicators, rules, briefing, diagnostic, llm, db).
 - **Base** : SQLite locale (`data/sam_invest.db`), inchangée.
 - **Secrets** : `.env` côté back uniquement (ANTHROPIC_API_KEY, FINNHUB_API_KEY,
   FMP_API_KEY). **Aucune clé n'atteint le navigateur.**
@@ -74,7 +74,6 @@ toujours accompagné d'une définition (tooltips glossaire). Langue : **françai
 | `profile` | Payload JSON profil complet (secteur, PER, ROE, description…) | ticker |
 | `news` | id, ticker, datetime, headline, summary, url, source | id |
 | `news_analysis` | Payload JSON : [{headline, categorie, tonalite, resume, titre_fr, resume_fr}] | ticker |
-| `briefing_snapshot` | État de référence pour le delta « depuis ta dernière visite » | 1 ligne |
 | `update_log` | Journal des mises à jour (asof, kind, statut, detail) | id |
 
 **Watchlist** : stockée dans `config.yaml` (pas en base). Un instrument =
@@ -166,21 +165,15 @@ pour tout, déclenché explicitement.
 
 **Actions utilisateur**
 - Bouton « Générer le briefing » (désactivé sans clé Claude).
-- Rappel des horodatages données/news (« le briefing se base sur ces données »).
+- Le briefing **reprend le contenu des onglets Données et News**. Rappel des
+  horodatages données/news avec ⚠️ si l'un date de plus de 2 h.
+- **Garde-fou de fraîcheur** : au clic, si les données ou les news datent de plus de
+  2 h (ou n'ont jamais été récupérées), aucun appel Sonnet n'est lancé ; un message
+  invite gentiment à rafraîchir l'onglet concerné d'abord.
 - Légende du code reco : 🥒 acheter · 🍊 maintenir · 🍅 vendre + disclaimer
   « heuristique LLM, pas un conseil financier ».
 
-**Bloc 1 — « Depuis ta dernière visite » (delta, gratuit, déterministe)**
-- Bouton « Marquer comme vu » (fixe l'état de référence, le delta repart de zéro).
-- Cas : première visite (pas de référence) / aucun changement depuis le JJ/MM /
-  changements :
-  - **Nouveaux flags** (rouge = alerte, jaune = info) et **flags résorbés** (✅).
-  - **Variations de cours notables** (≥ seuil configurable, défaut 3 %) :
-    tableau avant/maintenant/var %.
-  - **Révisions d'estimations modifiées** : net 30j avant → maintenant.
-  - **Nouvelles news** (compteur + liste repliable par ticker).
-
-**Bloc 2 — Vue d'ensemble**
+**Bloc 1 — Vue d'ensemble**
 - Compteur : « N alerte(s), M info(s) ».
 - **Synthèse globale rédigée par Sonnet** (paragraphe markdown), avec date des
   données utilisées.
@@ -188,12 +181,14 @@ pour tout, déclenché explicitement.
 - Sans briefing généré : invitation à cliquer ; sans clé API : bandeau explicatif
   (les flags et chiffres restent disponibles).
 
-**Bloc 3 — Par instrument** (une section repliable par ligne de watchlist)
+**Bloc 2 — Par instrument** (une section repliable par ligne de watchlist)
 - Icône de la section = fruit de la reco si briefing généré, sinon état des flags
   (rouge/jaune/neutre).
 - Dans la section, dans l'ordre :
   1. **Recommandation** (fruit + libellé) — en tête, c'est le cœur.
-  2. **Briefing rédigé** (2-4 phrases vulgarisées, Sonnet).
+  2. **Briefing en 3 parties** (Sonnet) : **📊 analyse des chiffres** (onglet
+     Données), **📰 analyse des news** (onglet News), **🎯 conclusion & arguments**
+     (justifie le fruit).
   3. **Chiffres clés** : cours, séance %, RSI 14, tendance, drawdown 52s.
   4. **Événements** (actions) : résultats dans X j, révisions 30j net, potentiel %.
   5. **Flags** de l'instrument (alerte = rouge, info = jaune), « aucun flag » sinon.
@@ -297,8 +292,7 @@ minimaliste**). Rappel des fondamentaux :
 | GET | `/api/news` | News + analyses Haiku, groupées par ticker |
 | POST | `/api/update/{kind}` | Lance une maj (`donnees` \| `news` \| `global`) → `job_id` |
 | GET | `/api/jobs/{job_id}` | Progression (fraction + message) + compte-rendu final |
-| GET | `/api/briefing` | Données déterministes du briefing + delta |
-| POST | `/api/briefing/vu` | « Marquer comme vu » (snapshot delta) |
+| GET | `/api/briefing` | Données déterministes du briefing (flags, chiffres, news) |
 | POST | `/api/briefing/generer` | Synthèse Sonnet — **SSE** (streaming) |
 | GET | `/api/diagnostic/search?q=` | Recherche d'entreprise |
 | POST | `/api/diagnostic/{ticker}` | Diagnostic — chiffres immédiats puis conclusions **SSE** |

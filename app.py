@@ -17,12 +17,12 @@ Separation stricte : chiffres/signaux = code deterministe ; texte = Claude (llm.
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pandas as pd
 import streamlit as st
 
-from sam_invest import db, delta, llm, signals
+from sam_invest import db, llm, signals
 from sam_invest.briefing import construire_briefing, indicateurs_ligne
 from sam_invest.data_sources import search_instruments
 from sam_invest.diagnostic import construire_diagnostic
@@ -49,7 +49,7 @@ db.init_db()
 
 # Etat persistant entre reruns (synthese generee a la demande).
 st.session_state.setdefault("synth_global", None)
-st.session_state.setdefault("synth_instruments", {})  # {ticker: {"fruit", "briefing"}}
+st.session_state.setdefault("synth_instruments", {})  # {ticker: {fruit, analyse_chiffres, analyse_news, conclusion}}
 st.session_state.setdefault("synthese_asof", None)
 st.session_state.setdefault("search_results", None)
 
@@ -102,6 +102,25 @@ def caption_derniere_maj(kind: str, libelle: str) -> None:
         st.caption(f"🕒 Derniere mise a jour {libelle} : **{fmt_dt(m['asof'])}** — {m['detail']}")
     else:
         st.caption(f"🕒 Aucune mise a jour {libelle} effectuee.")
+
+
+# Un briefing ne doit se baser que sur des donnees/news recentes.
+FRAICHEUR_MAX_H = 2
+
+
+def fraicheur(kind: str) -> tuple[bool, str | None]:
+    """(frais, asof) pour un type de maj : frais = moins de FRAICHEUR_MAX_H heures."""
+    m = db.last_update(kind)
+    if not m or not m.get("asof"):
+        return False, None
+    try:
+        dt = datetime.fromisoformat(str(m["asof"]))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+    except Exception:
+        return False, m.get("asof")
+    age_h = (datetime.now(timezone.utc) - dt).total_seconds() / 3600
+    return age_h <= FRAICHEUR_MAX_H, m["asof"]
 
 
 def _fmt(x, dec=2):
@@ -459,112 +478,64 @@ with tab_news:
 with tab_briefing:
     c1, c2 = st.columns([3, 1])
     with c1:
-        st.markdown("**Briefing** — vue d'ensemble + une section par instrument, chacune avec "
-                    "son interpretation et sa reco 🥒/🍊/🍅. "
+        st.markdown("**Briefing** — vue d'ensemble + une section par instrument en 3 parties : "
+                    "**analyse des chiffres** (onglet Donnees), **analyse des news** (onglet "
+                    "News), **conclusion & arguments** avec reco 🥒/🍊/🍅. "
                     "_Claude Sonnet, 1 seul appel pour tout._")
     with c2:
         btn_synthese = st.button("🧠 Generer le briefing", use_container_width=True,
                                  disabled=not config.watchlist or not config.secrets.anthropic_api_key)
-    md, mn = db.last_update("donnees"), db.last_update("news")
+
+    # Le briefing reprend le contenu des onglets Donnees et News : on verifie leur fraicheur.
+    donnees_fraiches, asof_donnees = fraicheur("donnees")
+    news_fraiches, asof_news = fraicheur("news")
+
+    def _tag_fraicheur(frais: bool, asof: str | None) -> str:
+        return f"**{fmt_dt(asof) if asof else 'jamais'}**" + ("" if frais else " ⚠️")
+
     st.caption(
-        f"🕒 Donnees : **{fmt_dt(md['asof']) if md else 'jamais'}** · "
-        f"News : **{fmt_dt(mn['asof']) if mn else 'jamais'}** "
-        "(le briefing se base sur ces donnees ; mets-les a jour avant de generer)."
+        f"🕒 Donnees : {_tag_fraicheur(donnees_fraiches, asof_donnees)} · "
+        f"News : {_tag_fraicheur(news_fraiches, asof_news)} "
+        f"(le briefing reprend ces deux onglets ; ⚠️ = plus vieux que {FRAICHEUR_MAX_H} h)."
     )
     st.caption("Code reco : 🥒 acheter · 🍊 maintenir · 🍅 vendre. "
                "⚠️ Heuristique generee par le LLM, **pas un conseil financier** — la decision reste tienne.")
 
     data = construire_briefing(config)  # deterministe : lit la base, n'appelle pas Claude
 
-    # --- Delta : ce qui a change depuis la derniere visite (deterministe, gratuit) ---
-    prev_snap = db.get_briefing_snapshot()
-    prev_state = None
-    if prev_snap and prev_snap.get("payload"):
-        try:
-            prev_state = json.loads(prev_snap["payload"])
-        except Exception:
-            prev_state = None
-    cur_state = delta.etat_courant(config, data)
-    seuil_var = float(config.briefing.get("delta_variation_notable_pct", 3))
-    d = delta.calculer_delta(prev_state, cur_state, seuil_var)
-    data["delta_depuis_derniere_visite"] = d  # transmis a la synthese Sonnet
-
     # Generation de la synthese (UN seul appel Sonnet -> global + par instrument).
     # Doit s'executer AVANT l'affichage pour apparaitre des ce rerun.
     if btn_synthese:
-        log(f"[UI] clic 'Generer le briefing' (watchlist={len(config.watchlist)}, "
-            f"instruments_briefing={len(data.get('instruments', []))})")
-        with st.spinner("Redaction du briefing + reco (Claude Sonnet)..."):
-            res = llm.synthese_et_reco(config.secrets, data)
-        if res:
-            st.session_state["synth_global"] = res.get("global")
-            st.session_state["synth_instruments"] = res.get("instruments", {})
-            m = db.last_update()
-            st.session_state["synthese_asof"] = (m["asof"] if m else None)
-            log(f"[UI] briefing stocke: global={len(res.get('global') or '')} chars, "
-                f"instruments={len(res.get('instruments') or {})}")
+        if not (donnees_fraiches and news_fraiches):
+            manquants = ([] if donnees_fraiches else ["Donnees"]) + ([] if news_fraiches else ["News"])
+            st.warning(
+                f"🌿 Avant de generer le briefing, rafraichis d'abord **{' et '.join(manquants)}** "
+                f"(rien de recupere, ou plus vieux que {FRAICHEUR_MAX_H} h). Va dans l'onglet "
+                "concerne et clique « Mettre a jour », ou « Tout mettre a jour » en haut. "
+                "Le briefing sera ainsi base sur des chiffres et des news a jour."
+            )
+            log("[UI] 'Generer le briefing' bloque : donnees/news pas fraiches "
+                f"(donnees_fraiches={donnees_fraiches}, news_fraiches={news_fraiches})", "warning")
         else:
-            st.error("Briefing indisponible (cle/credit Claude ?). Voir data/sam_invest.log.")
-            log("[UI] briefing = None -> rien a afficher", "error")
+            log(f"[UI] clic 'Generer le briefing' (watchlist={len(config.watchlist)}, "
+                f"instruments_briefing={len(data.get('instruments', []))})")
+            with st.spinner("Redaction du briefing + reco (Claude Sonnet)..."):
+                res = llm.synthese_et_reco(config.secrets, data)
+            if res:
+                st.session_state["synth_global"] = res.get("global")
+                st.session_state["synth_instruments"] = res.get("instruments", {})
+                m = db.last_update()
+                st.session_state["synthese_asof"] = (m["asof"] if m else None)
+                log(f"[UI] briefing stocke: global={len(res.get('global') or '')} chars, "
+                    f"instruments={len(res.get('instruments') or {})}")
+            else:
+                st.error("Briefing indisponible (cle/credit Claude ?). Voir data/sam_invest.log.")
+                log("[UI] briefing = None -> rien a afficher", "error")
 
     # =====================================================================
     # SECTION GLOBAL (big picture)
     # =====================================================================
     st.markdown("## 🌍 Global")
-
-    dc1, dc2 = st.columns([3, 1])
-    with dc1:
-        st.markdown("### 🆕 Depuis ta derniere visite")
-    with dc2:
-        btn_vu = st.button("✅ Marquer comme vu", use_container_width=True,
-                           help="Fixe l'etat actuel comme reference : le delta repart de zero.")
-
-    if d.get("premiere_visite"):
-        st.info("Pas de point de comparaison (premiere visite). Clique « Marquer comme vu » "
-                "pour fixer une reference ; les prochains briefings montreront les changements.")
-    elif delta.est_vide(d):
-        st.success(f"Aucun changement depuis le {fmt_dt(d['depuis'])}.")
-    else:
-        st.caption(f"Compare a l'etat du {fmt_dt(d['depuis'])}.")
-        if d["nouveaux_flags"]:
-            st.markdown("**Nouveaux flags :**")
-            for f in d["nouveaux_flags"]:
-                ic = "🔴" if f["severite"] == "alerte" else "🟡"
-                st.markdown(f"- {ic} [{f['regle']}] {f['message']}")
-        if d["flags_resolus"]:
-            st.markdown("**Flags resorbes :**")
-            for f in d["flags_resolus"]:
-                st.markdown(f"- ✅ [{f['regle']}] {f['message']}")
-        if d["variations_prix"]:
-            st.markdown(f"**Variations de cours notables (≥ {seuil_var:.0f}%) :**")
-            st.dataframe(
-                pd.DataFrame([
-                    {"Ticker": v["ticker"], "Avant": v["avant"],
-                     "Maintenant": v["maintenant"], "Var %": v["var_pct"]}
-                    for v in d["variations_prix"]
-                ]),
-                use_container_width=True, hide_index=True,
-                column_config={
-                    "Avant": st.column_config.NumberColumn(format="%.2f"),
-                    "Maintenant": st.column_config.NumberColumn(format="%.2f"),
-                    "Var %": st.column_config.NumberColumn(format="%.1f"),
-                },
-            )
-        if d["changements_revisions"]:
-            st.markdown("**Revisions d'estimations modifiees :**")
-            for c in d["changements_revisions"]:
-                st.markdown(f"- {c['ticker']} : net 30j {c['avant']:+.0f} → {c['maintenant']:+.0f}")
-        if d["nouvelles_news"]:
-            n_total = sum(len(v) for v in d["nouvelles_news"].values())
-            with st.expander(f"Nouvelles news ({n_total})"):
-                for t, titres in d["nouvelles_news"].items():
-                    for h in titres:
-                        st.markdown(f"- **{t}** — {h}")
-
-    if btn_vu:
-        db.save_briefing_snapshot(cur_state["asof"], json.dumps(cur_state, ensure_ascii=False))
-        st.success("Etat marque comme vu. Le delta repart de zero.")
-        st.rerun()
 
     # --- Vue d'ensemble : resume des flags + synthese globale (big picture) ---
     flags = data["flags"]
@@ -618,13 +589,20 @@ with tab_briefing:
         # L'icone du volet = la reco si dispo, sinon l'etat des flags.
         icon = f_emoji or ("🔴" if has_alerte else ("🟡" if fl else "·"))
         with st.expander(f"{icon} {t} — {inst.nom}"):
-            # Reco + briefing EN TETE : coeur de la vue par instrument.
+            # Reco + briefing en 3 parties EN TETE : coeur de la vue par instrument.
             if f_emoji:
                 st.markdown(f"### {f_emoji} {f_label}")
-            brief = entry.get("briefing")
-            if brief:
-                st.markdown(f"📝 {brief}")
-            elif not entry:
+            if entry:
+                if entry.get("analyse_chiffres"):
+                    st.markdown("**📊 Analyse des chiffres**")
+                    st.markdown(entry["analyse_chiffres"])
+                if entry.get("analyse_news"):
+                    st.markdown("**📰 Analyse des news**")
+                    st.markdown(entry["analyse_news"])
+                if entry.get("conclusion"):
+                    st.markdown("**🎯 Conclusion & arguments**")
+                    st.markdown(entry["conclusion"])
+            else:
                 st.caption("📝 Briefing non genere — clique « Generer le briefing » "
                            "en haut de l'onglet.")
             st.markdown("**Chiffres cles**")

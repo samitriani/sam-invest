@@ -90,12 +90,6 @@ CREATE TABLE IF NOT EXISTS news_analysis (
     model      TEXT
 );
 
-CREATE TABLE IF NOT EXISTS briefing_snapshot (
-    id      INTEGER PRIMARY KEY,    -- toujours 1 : on ne garde que la derniere reference
-    asof    TEXT,
-    payload TEXT                    -- JSON de l'etat de reference (prix, flags, news, revisions)
-);
-
 CREATE TABLE IF NOT EXISTS update_log (
     id      INTEGER PRIMARY KEY AUTOINCREMENT,
     asof    TEXT,
@@ -227,21 +221,6 @@ def upsert_news_analysis(ticker: str, asof: str, payload_json: str, model: str) 
                ON CONFLICT(ticker) DO UPDATE SET asof=excluded.asof, payload=excluded.payload, model=excluded.model""",
             (ticker, asof, payload_json, model),
         )
-
-
-def save_briefing_snapshot(asof: str, payload_json: str) -> None:
-    with get_conn() as conn:
-        conn.execute(
-            "INSERT INTO briefing_snapshot (id, asof, payload) VALUES (1, ?, ?) "
-            "ON CONFLICT(id) DO UPDATE SET asof=excluded.asof, payload=excluded.payload",
-            (asof, payload_json),
-        )
-
-
-def get_briefing_snapshot() -> dict | None:
-    with get_conn() as conn:
-        row = conn.execute("SELECT * FROM briefing_snapshot WHERE id = 1").fetchone()
-        return dict(row) if row else None
 
 
 def log_update(asof: str, kind: str, status: str, detail: str) -> None:
