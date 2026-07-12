@@ -24,6 +24,7 @@ import streamlit as st
 
 from sam_invest import db, llm, signals
 from sam_invest.briefing import construire_briefing, indicateurs_ligne
+from sam_invest.export import construire_export_md
 from sam_invest.data_sources import search_instruments
 from sam_invest.diagnostic import construire_diagnostic
 from sam_invest import glossaire
@@ -265,6 +266,9 @@ with head_r:
         "🔄 Tout mettre a jour", use_container_width=True, disabled=not config.watchlist,
         help="Donnees + News. Ne genere PAS la synthese Sonnet (cout maitrise).",
     )
+    # Emplacement reserve pour l'export : rempli en fin de script (voir plus bas)
+    # afin d'inclure le briefing et le diagnostic generes durant ce rerun.
+    export_slot = st.empty()
 
 st.caption(
     "Watchlist personnelle (Tech & emergents). Chiffres et signaux calcules par du "
@@ -870,6 +874,31 @@ with tab_edit:
                 msg += f" {ignores} ligne(s) ignoree(s) (ticker vide ou doublon)."
             st.success(msg)
             st.rerun()  # recharge config.yaml pour rafraichir toute l'app
+
+# ==========================================================================
+# EXPORT GLOBAL (.md) — bouton dans l'en-tete, rempli ICI (fin de script)
+# pour inclure le briefing ET le diagnostic generes durant ce meme rerun.
+# Un seul document Markdown, pense pour etre reanalyse par Claude ensuite.
+# ==========================================================================
+try:
+    _md_export = construire_export_md(
+        config,
+        synth_global=st.session_state.get("synth_global"),
+        synth_instruments=st.session_state.get("synth_instruments"),
+        diag_result=st.session_state.get("diag_result"),
+    )
+    export_slot.download_button(
+        "⬇️ Exporter (.md)",
+        data=_md_export.encode("utf-8"),
+        file_name=f"sam_invest_export_{datetime.now():%Y%m%d_%H%M}.md",
+        mime="text/markdown",
+        use_container_width=True,
+        disabled=not config.watchlist,
+        help="Exporte toutes les donnees (Donnees, News, Briefing, Diagnostic) en un "
+             "Markdown unique, pret a coller a Claude pour analyse.",
+    )
+except Exception as e:  # l'export ne doit jamais casser l'app
+    log(f"[UI] export .md indisponible: {type(e).__name__}: {e}", "error")
 
 # Note : suivi de portefeuille (PRU, allocation, DCA) retire -> outil de watchlist.
 # Note : fonctionnalite email SMTP reportee (choix utilisateur).
