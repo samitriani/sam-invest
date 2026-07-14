@@ -31,7 +31,8 @@ from sam_invest import glossaire
 from sam_invest.events import construire_evenements
 from sam_invest.logs import log
 from sam_invest.config import CONFIG_PATH, load_config, save_watchlist
-from sam_invest.update import update_donnees, update_global, update_news
+from sam_invest.update import (update_donnees, update_donnees_instrument,
+                               update_global, update_news)
 
 st.set_page_config(page_title="Sam_Invest", page_icon="📊", layout="wide")
 
@@ -218,6 +219,64 @@ def afficher_fondamentaux(ticker: str) -> None:
             )
 
 
+def afficher_avis_analystes(ticker: str) -> None:
+    """Rend la sous-partie 'Avis des analystes' : consensus + upgrades/downgrades."""
+    ar = db.get_analyst_ratings(ticker)
+    if not ar:
+        st.caption("Avis des analystes non recuperes. Lance une mise a jour des donnees "
+                   "(actions uniquement).")
+        return
+    st.caption(f"Source : {ar.get('source')} · maj {fmt_dt(ar.get('asof'))}")
+
+    # Consensus courant (nb d'analystes par avis).
+    if any(ar.get(k) is not None for k in ("strong_buy", "buy", "hold", "sell", "strong_sell")):
+        cc = st.columns(5)
+        cc[0].metric("Achat fort", f"{ar.get('strong_buy') or 0:.0f}")
+        cc[1].metric("Achat", f"{ar.get('buy') or 0:.0f}")
+        cc[2].metric("Conserver", f"{ar.get('hold') or 0:.0f}")
+        cc[3].metric("Vendre", f"{ar.get('sell') or 0:.0f}")
+        cc[4].metric("Vendre fort", f"{ar.get('strong_sell') or 0:.0f}")
+
+    # Tendance du consensus (evolution mensuelle des avis "achat").
+    try:
+        trend = json.loads(ar.get("trend") or "[]")
+    except Exception:
+        trend = []
+    if len(trend) >= 2:
+        def _achats(e):
+            return (e.get("strong_buy") or 0) + (e.get("buy") or 0)
+        now = next((e for e in trend if e.get("periode") == "0m"), trend[0])
+        prev = next((e for e in trend if e.get("periode") == "-1m"), None)
+        if prev:
+            diff = _achats(now) - _achats(prev)
+            fleche = "↗️ en amelioration" if diff > 0 else ("↘️ en degradation" if diff < 0 else "→ stable")
+            st.caption(f"Tendance du consensus vs mois dernier : {fleche} "
+                       f"({_achats(prev):.0f} → {_achats(now):.0f} avis a l'achat).")
+
+    # Derniers upgrades / downgrades par firme.
+    try:
+        ups = json.loads(ar.get("upgrades") or "[]")
+    except Exception:
+        ups = []
+    if ups:
+        st.markdown("**Derniers changements d'avis (90 j) :**")
+        ICO = {"releve": "🟢", "abaisse": "🔴", "initie": "🆕", "confirme": "⚪"}
+        st.dataframe(
+            pd.DataFrame([
+                {" ": ICO.get(u.get("action"), "·"),
+                 "Date": u.get("date"),
+                 "Firme": u.get("firme"),
+                 "Action": u.get("action"),
+                 "De": u.get("de") or "",
+                 "Vers": u.get("vers") or ""}
+                for u in ups
+            ]),
+            use_container_width=True, hide_index=True,
+        )
+    else:
+        st.caption("Aucun changement d'avis d'analyste sur les 90 derniers jours.")
+
+
 def rendre_news(n: dict, a: dict | None = None, compact: bool = False) -> None:
     """Affiche une news : titre (traduit FR si dispo) + categorie/tonalite,
     resume source traduit (mode complet), et lien vers l'article original."""
@@ -370,11 +429,21 @@ with tab_donnees:
                 "Ex-dividende": v.exdiv_date or "n/d",
                 "Dans ": _jours(v.jours_avant_exdiv),
             })
+            ar = db.get_analyst_ratings(v.instrument.ticker)
+            # Consensus condense : achat fort + achat / conserver / vendre + vendre fort.
+            achat = cons = vente = None
+            if ar and any(ar.get(k) is not None for k in ("strong_buy", "buy", "hold")):
+                achat = (ar.get("strong_buy") or 0) + (ar.get("buy") or 0)
+                cons = ar.get("hold") or 0
+                vente = (ar.get("sell") or 0) + (ar.get("strong_sell") or 0)
             est_rows.append({
                 "Ticker": v.instrument.ticker,
                 "Revisions 30j (net)": v.rev_net_30,
                 "Hausses": v.rev_up_30,
                 "Baisses": v.rev_down_30,
+                "Achat": achat,
+                "Conserver": cons,
+                "Vendre": vente,
                 "Obj. cours moyen": v.pt_mean,
                 "Potentiel %": v.potentiel_pct,
             })
@@ -383,7 +452,7 @@ with tab_donnees:
             st.markdown("**Calendrier**")
             st.dataframe(pd.DataFrame(cal_rows), use_container_width=True, hide_index=True)
         with cc2:
-            st.markdown("**Estimations & revisions**")
+            st.markdown("**Estimations, revisions & consensus**")
             st.dataframe(
                 pd.DataFrame(est_rows), use_container_width=True, hide_index=True,
                 column_config={
@@ -391,6 +460,12 @@ with tab_donnees:
                         format="%.0f", help=glossaire.definition("Revisions")),
                     "Hausses": st.column_config.NumberColumn(format="%.0f"),
                     "Baisses": st.column_config.NumberColumn(format="%.0f"),
+                    "Achat": st.column_config.NumberColumn(
+                        format="%.0f", help="Nb d'analystes en Achat (fort inclus)"),
+                    "Conserver": st.column_config.NumberColumn(
+                        format="%.0f", help="Nb d'analystes en Conserver"),
+                    "Vendre": st.column_config.NumberColumn(
+                        format="%.0f", help="Nb d'analystes en Vendre (fort inclus)"),
                     "Obj. cours moyen": st.column_config.NumberColumn(
                         format="%.2f", help=glossaire.definition("Objectif")),
                     "Potentiel %": st.column_config.NumberColumn(
@@ -398,7 +473,8 @@ with tab_donnees:
                 },
             )
         st.caption("Revisions 30j (net) = analystes relevant l'EPS − ceux l'abaissant (negatif = "
-                   "attentes en degradation). Potentiel % = objectif moyen vs cours. "
+                   "attentes en degradation). Achat/Conserver/Vendre = consensus des analystes. "
+                   "Potentiel % = objectif moyen vs cours. "
                    "Donnees actions uniquement ; lance une mise a jour des donnees pour les remplir.")
 
     # Donnees par instrument : cours + fondamentaux.
@@ -409,6 +485,38 @@ with tab_donnees:
             "Instrument a afficher", tickers,
             format_func=lambda t: next((f"{i.ticker} — {i.nom}" for i in config.watchlist if i.ticker == t), t),
         )
+
+        # --- Auto-recuperation : si les donnees de CET instrument ne sont pas du
+        # jour, on les recupere automatiquement (lui seul, pas toute la watchlist).
+        # Garde-fou : une seule tentative par instrument et par jour dans la session,
+        # pour ne pas re-interroger en boucle un ticker qui ne repond pas.
+        aujourd_hui = datetime.now().strftime("%Y-%m-%d")
+
+        def _quote_du_jour(t: str) -> bool:
+            q = db.get_quote(t)
+            if not q or not q.get("asof"):
+                return False
+            try:
+                d = datetime.fromisoformat(str(q["asof"]))
+                if d.tzinfo is not None:
+                    d = d.astimezone()
+                return d.strftime("%Y-%m-%d") == aujourd_hui
+            except Exception:
+                return False
+
+        tentatives = st.session_state.setdefault("auto_maj_donnees", {})
+        if not _quote_du_jour(choix) and tentatives.get(choix) != aujourd_hui:
+            tentatives[choix] = aujourd_hui
+            with st.spinner(f"Donnees de {choix} pas a jour : recuperation automatique..."):
+                cr_auto = update_donnees_instrument(config, choix)
+            if cr_auto.get("status") == "ok":
+                st.caption(f"✅ Donnees de {choix} recuperees a l'instant.")
+            else:
+                st.warning(f"Impossible de recuperer les donnees de {choix} "
+                           "(reseau/source ?). Reessaie via « Mettre a jour les donnees ».")
+        q_sel = db.get_quote(choix)
+        if q_sel and q_sel.get("asof"):
+            st.caption(f"🕒 Donnees de {choix} : maj {fmt_dt(q_sel['asof'])}.")
 
         # --- Sous-partie 1 : cours de l'instrument ---
         st.markdown("#### Cours de l'instrument")
@@ -432,6 +540,12 @@ with tab_donnees:
         # --- Sous-partie 2 : fondamentaux de l'instrument ---
         st.markdown("#### Fondamentaux de l'instrument")
         afficher_fondamentaux(choix)
+
+        # --- Sous-partie 3 : avis des analystes (actions uniquement) ---
+        type_choix = next((i.type for i in config.watchlist if i.ticker == choix), "action")
+        if type_choix.lower() == "action":
+            st.markdown("#### Avis des analystes")
+            afficher_avis_analystes(choix)
 
 
 # --------------------------------------------------------------------------
@@ -523,8 +637,20 @@ with tab_briefing:
         else:
             log(f"[UI] clic 'Generer le briefing' (watchlist={len(config.watchlist)}, "
                 f"instruments_briefing={len(data.get('instruments', []))})")
-            with st.spinner("Redaction du briefing + reco (Claude Sonnet)..."):
-                res = llm.synthese_et_reco(config.secrets, data)
+            prog_ph = st.empty()
+            prog_ph.info("🧠 Redaction du briefing + reco (Claude Sonnet)…")
+            _prog_state = {"shown": 0}
+
+            def _prog(n: int) -> None:
+                # Rafraichit l'UI pendant le stream (feedback + connexion maintenue),
+                # mais throttle a ~400 caracteres pour ne pas saturer le frontend.
+                if n - _prog_state["shown"] >= 400:
+                    _prog_state["shown"] = n
+                    prog_ph.info(f"🧠 Redaction du briefing + reco (Claude Sonnet)… "
+                                 f"{n} caracteres recus")
+
+            res = llm.synthese_et_reco(config.secrets, data, progress=_prog)
+            prog_ph.empty()
             if res:
                 st.session_state["synth_global"] = res.get("global")
                 st.session_state["synth_instruments"] = res.get("instruments", {})

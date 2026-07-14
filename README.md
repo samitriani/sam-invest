@@ -75,11 +75,14 @@ Chaque onglet a son propre bouton de mise a jour et affiche sa derniere date/heu
 pour maitriser la consommation d'API Claude :
 
 - **📈 Donnees** _(0 appel Claude)_ : met a jour prix + fondamentaux + evenements/
-  estimations + profils. Affiche le tableau watchlist + signaux, la section
-  **« A venir & estimations »**, et **« Donnees par instrument »** en deux sous-parties :
-  *Cours de l'instrument* (graphique + indicateurs) et *Fondamentaux de l'instrument*
+  estimations + **avis des analystes** + profils. Affiche le tableau watchlist +
+  signaux, la section **« A venir & estimations »** (avec le consensus
+  Achat/Conserver/Vendre), et **« Donnees par instrument »** en trois sous-parties :
+  *Cours de l'instrument* (graphique + indicateurs), *Fondamentaux de l'instrument*
   (actions : PER, P/B, marges, ROE, croissance, dette, FCF, dividende, objectif ;
-  ETF : categorie, encours, TER, rendement, perf YTD, top holdings).
+  ETF : categorie, encours, TER, rendement, perf YTD, top holdings) et *Avis des
+  analystes* (actions : consensus + tendance vs mois dernier + derniers
+  upgrades/downgrades par firme sur 90 j).
 - **📰 News** _(Claude Haiku)_ : recupere et classe les news. Affiche les news par
   instrument (brutes toujours visibles, enrichies si analysees).
 - **🧠 Briefing** _(Claude Sonnet, a la demande)_ : reprend le contenu des onglets

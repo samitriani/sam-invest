@@ -491,6 +491,88 @@ def fetch_events_estimates(ticker: str) -> dict | None:
 
 
 # ==========================================================================
+# AVIS DES ANALYSTES  --  yfinance
+# --------------------------------------------------------------------------
+# Consensus de recommandation (nb d'analystes Achat fort/Achat/Conserver/
+# Vendre/Vendre fort, avec l'historique mensuel) + upgrades/downgrades
+# recents par firme. Actions uniquement. 100% deterministe, aucun LLM.
+# ==========================================================================
+_UD_ACTION_FR = {"up": "releve", "down": "abaisse", "init": "initie",
+                 "main": "confirme", "reit": "confirme"}
+
+
+def fetch_analyst_ratings(ticker: str, max_upgrades: int = 15,
+                          upgrades_days: int = 90) -> dict | None:
+    """Consensus analystes + upgrades/downgrades recents. None si rien d'exploitable."""
+    if yf is None:
+        return None
+    try:
+        tk = yf.Ticker(ticker)
+        out = {
+            "ticker": ticker,
+            "asof": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "strong_buy": None, "buy": None, "hold": None,
+            "sell": None, "strong_sell": None,
+            "trend": [],      # [{periode, strong_buy, buy, hold, sell, strong_sell}]
+            "upgrades": [],   # [{date, firme, action, de, vers}]
+            "source": "yfinance",
+        }
+
+        # --- Consensus (periode courante '0m' + historique mensuel) ---
+        try:
+            rs = tk.recommendations_summary
+            if rs is not None and not rs.empty:
+                for _, row in rs.iterrows():
+                    entry = {
+                        "periode": str(row.get("period")),
+                        "strong_buy": _safe_float(row.get("strongBuy")),
+                        "buy": _safe_float(row.get("buy")),
+                        "hold": _safe_float(row.get("hold")),
+                        "sell": _safe_float(row.get("sell")),
+                        "strong_sell": _safe_float(row.get("strongSell")),
+                    }
+                    out["trend"].append(entry)
+                    if entry["periode"] == "0m":
+                        for k in ("strong_buy", "buy", "hold", "sell", "strong_sell"):
+                            out[k] = entry[k]
+        except Exception:
+            pass
+
+        # --- Upgrades / downgrades recents (par firme) ---
+        try:
+            ud = tk.upgrades_downgrades
+            if ud is not None and not ud.empty:
+                seuil = datetime.now(timezone.utc) - timedelta(days=upgrades_days)
+                rows = []
+                for idx, row in ud.iterrows():
+                    try:
+                        dt = idx.to_pydatetime()
+                        if dt.tzinfo is None:
+                            dt = dt.replace(tzinfo=timezone.utc)
+                    except Exception:
+                        continue
+                    if dt < seuil:
+                        continue
+                    action = str(row.get("Action") or "").lower()
+                    rows.append({
+                        "date": dt.strftime("%Y-%m-%d"),
+                        "firme": str(row.get("Firm") or ""),
+                        "action": _UD_ACTION_FR.get(action, action or "n/d"),
+                        "de": str(row.get("FromGrade") or "") or None,
+                        "vers": str(row.get("ToGrade") or "") or None,
+                    })
+                rows.sort(key=lambda r: r["date"], reverse=True)
+                out["upgrades"] = rows[:max_upgrades]
+        except Exception:
+            pass
+
+        usable = out["strong_buy"] is not None or out["buy"] is not None or out["upgrades"]
+        return out if usable else None
+    except Exception:
+        return None
+
+
+# ==========================================================================
 # ETATS FINANCIERS (diagnostic)  --  yfinance
 # --------------------------------------------------------------------------
 # Compte de resultat + bilan + cash-flow (annuels, ~5 ans) + info. Sert au

@@ -4,6 +4,7 @@ Couche donnees pure. Tables :
   - prices          : historique de cloture par ticker/date.
   - quotes          : dernier snapshot (prix, variation seance, 52s) par ticker.
   - fundamentals    : derniers fondamentaux par ticker (CTO surtout).
+  - analyst_ratings : consensus analystes + upgrades/downgrades (actions).
   - news            : news brutes recuperees.
   - news_analysis   : sortie de la couche jugement (Claude) - clairement separee.
   - update_log      : journal des mises a jour.
@@ -63,6 +64,19 @@ CREATE TABLE IF NOT EXISTS events_estimates (
     pt_low          REAL,
     pt_current      REAL,           -- cours courant (reference de l'objectif)
     source          TEXT
+);
+
+CREATE TABLE IF NOT EXISTS analyst_ratings (
+    ticker      TEXT PRIMARY KEY,
+    asof        TEXT NOT NULL,
+    strong_buy  REAL,               -- consensus courant (periode '0m')
+    buy         REAL,
+    hold        REAL,
+    sell        REAL,
+    strong_sell REAL,
+    trend       TEXT,               -- JSON : historique mensuel du consensus
+    upgrades    TEXT,               -- JSON : upgrades/downgrades recents par firme
+    source      TEXT
 );
 
 CREATE TABLE IF NOT EXISTS profile (
@@ -181,6 +195,28 @@ def upsert_events_estimates(e: dict) -> None:
 def get_events_estimates(ticker: str) -> dict | None:
     with get_conn() as conn:
         row = conn.execute("SELECT * FROM events_estimates WHERE ticker = ?", (ticker,)).fetchone()
+        return dict(row) if row else None
+
+
+def upsert_analyst_ratings(r: dict) -> None:
+    """r = sortie de data_sources.fetch_analyst_ratings, trend/upgrades deja en JSON str."""
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO analyst_ratings
+               (ticker, asof, strong_buy, buy, hold, sell, strong_sell, trend, upgrades, source)
+               VALUES (:ticker, :asof, :strong_buy, :buy, :hold, :sell, :strong_sell,
+                :trend, :upgrades, :source)
+               ON CONFLICT(ticker) DO UPDATE SET
+                 asof=excluded.asof, strong_buy=excluded.strong_buy, buy=excluded.buy,
+                 hold=excluded.hold, sell=excluded.sell, strong_sell=excluded.strong_sell,
+                 trend=excluded.trend, upgrades=excluded.upgrades, source=excluded.source""",
+            r,
+        )
+
+
+def get_analyst_ratings(ticker: str) -> dict | None:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM analyst_ratings WHERE ticker = ?", (ticker,)).fetchone()
         return dict(row) if row else None
 
 

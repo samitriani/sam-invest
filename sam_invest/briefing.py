@@ -66,6 +66,13 @@ def construire_briefing(config: AppConfig) -> dict:
             except Exception:
                 pass
 
+    # Avis des analystes (consensus + derniers upgrades/downgrades), par ticker.
+    avis_analystes = {}
+    for inst in config.watchlist:
+        a = avis_analystes_compact(inst.ticker)
+        if a:
+            avis_analystes[inst.ticker] = a
+
     return {
         "devise": config.devise,
         "derniere_maj": db.last_update(),
@@ -76,7 +83,33 @@ def construire_briefing(config: AppConfig) -> dict:
             for f in flags
         ],
         "news_resumees": news_resumees,
+        "avis_analystes": avis_analystes,
     }
+
+
+def avis_analystes_compact(ticker: str, max_upgrades: int = 3) -> dict | None:
+    """Consensus + derniers changements d'avis, compacte pour la synthese Sonnet."""
+    r = db.get_analyst_ratings(ticker)
+    if not r:
+        return None
+    out = {
+        "consensus": {
+            "achat_fort": r.get("strong_buy"), "achat": r.get("buy"),
+            "conserver": r.get("hold"), "vendre": r.get("sell"),
+            "vendre_fort": r.get("strong_sell"),
+        },
+    }
+    try:
+        ups = json.loads(r.get("upgrades") or "[]")
+    except Exception:
+        ups = []
+    if ups:
+        out["derniers_changements_avis"] = [
+            {"date": u.get("date"), "firme": u.get("firme"), "action": u.get("action"),
+             "vers": u.get("vers")}
+            for u in ups[:max_upgrades]
+        ]
+    return out
 
 
 def indicateurs_ligne(ticker: str) -> dict:

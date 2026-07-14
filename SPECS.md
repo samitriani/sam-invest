@@ -71,6 +71,7 @@ toujours accompagné d'une définition (tooltips glossaire). Langue : **françai
 | `quotes` | Dernier cours, variation séance, high/low 52s, drawdown, source | ticker |
 | `fundamentals` | CA TTM, croissance, marge nette, dette/capitaux, source | ticker |
 | `events_estimates` | Date résultats, ex-dividende, révisions EPS 30j/7j, objectifs de cours | ticker |
+| `analyst_ratings` | Consensus analystes (achat fort/achat/conserver/vendre/vendre fort) + tendance mensuelle + upgrades/downgrades 90j | ticker |
 | `profile` | Payload JSON profil complet (secteur, PER, ROE, description…) | ticker |
 | `news` | id, ticker, datetime, headline, summary, url, source | id |
 | `news_analysis` | Payload JSON : [{headline, categorie, tonalite, resume, titre_fr, resume_fr}] | ticker |
@@ -121,10 +122,14 @@ Données de marché et signaux techniques. **Aucun appel LLM.**
 
 **Bloc 2 — « À venir & estimations » (actions uniquement)**, deux tableaux côte à côte :
 - *Calendrier* : date de résultats + « dans X j » (auj./demain/X j/passé), ex-dividende.
-- *Estimations & révisions* : révisions EPS 30j (net, hausses, baisses), objectif de
-  cours moyen, potentiel % vs cours actuel.
+- *Estimations, révisions & consensus* : révisions EPS 30j (net, hausses, baisses),
+  consensus analystes (Achat / Conserver / Vendre), objectif de cours moyen,
+  potentiel % vs cours actuel.
 
 **Bloc 3 — Détail par instrument** (sélecteur d'instrument) :
+- **Auto-récupération** : à la sélection, si les données de l'instrument ne sont pas
+  du jour, elles sont récupérées automatiquement (cet instrument seul, une tentative
+  par jour et par session ; la fraîcheur globale de l'onglet n'est pas modifiée).
 - Graphique linéaire du cours (historique 2 ans).
 - 5 métriques : Dernier, SMA 50, SMA 200, RSI 14, Plus-haut 52s.
 - **Fondamentaux** selon le type :
@@ -132,6 +137,10 @@ Données de marché et signaux techniques. **Aucun appel LLM.**
     ROE, rendement dividende, croissance CA, croissance BPA, dette/capitaux,
     current ratio (grille 4 colonnes, ~4 rangées) + source et date.
   - *ETF* : champs spécifiques du profil (encours, frais, exposition…).
+- **Avis des analystes** (actions) : consensus courant (5 compteurs : achat fort →
+  vendre fort), tendance vs mois dernier (↗️/↘️/→ sur les avis à l'achat), et tableau
+  des upgrades/downgrades des 90 derniers jours (🟢 relevé · 🔴 abaissé · 🆕 initié ·
+  ⚪ confirmé, avec firme, de → vers).
 
 **États** : watchlist vide → invitation à la remplir ; colonnes vides → inviter à
 lancer une mise à jour ; pas d'historique → message dédié.

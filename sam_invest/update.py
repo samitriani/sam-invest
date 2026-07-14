@@ -40,6 +40,89 @@ def _now() -> str:
 # ==========================================================================
 # Donnees de marche : prix + fondamentaux (AUCUN appel Claude)
 # ==========================================================================
+def _maj_donnees_instrument(p, s, progress: ProgressFn, base: float, span: float) -> tuple[dict, list[str]]:
+    """Prix + fondamentaux + evenements + avis analystes + profil pour UN instrument.
+
+    `base`/`span` positionnent la progression dans la barre globale (0..1).
+    Renvoie (compteurs {prix, fond, evt, avis, prof, action}, details).
+    """
+    t = p.ticker
+    cnt = {"prix": 0, "fond": 0, "evt": 0, "avis": 0, "prof": 0,
+           "action": 1 if p.type.lower() == "action" else 0}
+    details: list[str] = []
+
+    progress(base, f"{t} : prix...")
+    try:
+        res = ds.fetch_prices(t, s.finnhub_api_key, s.fmp_api_key)
+        if res and res.get("quote"):
+            if res.get("history"):
+                db.upsert_prices(t, res["history"])
+            db.upsert_quote(res["quote"])
+            cnt["prix"] = 1
+            details.append(f"{t} : prix OK ({res['quote'].get('source')}).")
+        else:
+            details.append(f"{t} : prix indisponible (aucune source).")
+    except Exception as e:
+        details.append(f"{t} : erreur prix ({e}).")
+
+    # Fondamentaux + evenements/estimations + avis : actions uniquement.
+    if cnt["action"]:
+        progress(base + 0.4 * span, f"{t} : fondamentaux...")
+        try:
+            f = ds.fetch_fundamentals(t, s.finnhub_api_key, s.fmp_api_key)
+            if f:
+                db.upsert_fundamentals(f)
+                cnt["fond"] = 1
+                details.append(f"{t} : fondamentaux OK ({f.get('source')}).")
+            else:
+                details.append(f"{t} : fondamentaux indisponibles.")
+        except Exception as e:
+            details.append(f"{t} : erreur fondamentaux ({e}).")
+
+        progress(base + 0.7 * span, f"{t} : evenements & estimations...")
+        try:
+            ev = ds.fetch_events_estimates(t)
+            if ev:
+                db.upsert_events_estimates(ev)
+                cnt["evt"] = 1
+                details.append(f"{t} : evenements/estimations OK "
+                               f"(resultats {ev.get('earnings_date') or 'n/d'}).")
+            else:
+                details.append(f"{t} : evenements/estimations indisponibles.")
+        except Exception as e:
+            details.append(f"{t} : erreur evenements/estimations ({e}).")
+
+        progress(base + 0.8 * span, f"{t} : avis analystes...")
+        try:
+            ar = ds.fetch_analyst_ratings(t)
+            if ar:
+                ar = dict(ar)
+                ar["trend"] = json.dumps(ar.get("trend") or [], ensure_ascii=False)
+                ar["upgrades"] = json.dumps(ar.get("upgrades") or [], ensure_ascii=False)
+                db.upsert_analyst_ratings(ar)
+                cnt["avis"] = 1
+                details.append(f"{t} : avis analystes OK.")
+            else:
+                details.append(f"{t} : avis analystes indisponibles.")
+        except Exception as e:
+            details.append(f"{t} : erreur avis analystes ({e}).")
+
+    # Profil / fondamentaux d'affichage : tous les instruments (actions ET ETF).
+    progress(base + 0.85 * span, f"{t} : profil...")
+    try:
+        prof = ds.fetch_profil(t, p.type)
+        if prof:
+            db.upsert_profile(prof["ticker"], prof["asof"], prof["type"],
+                              json.dumps(prof["payload"], ensure_ascii=False), prof["source"])
+            cnt["prof"] = 1
+        else:
+            details.append(f"{t} : profil indisponible.")
+    except Exception as e:
+        details.append(f"{t} : erreur profil ({e}).")
+
+    return cnt, details
+
+
 def update_donnees(config: AppConfig, progress: ProgressFn | None = None) -> dict:
     progress = progress or _noop
     db.init_db()
@@ -52,72 +135,44 @@ def update_donnees(config: AppConfig, progress: ProgressFn | None = None) -> dic
 
     n = len(instruments)
     details: list[str] = []
-    ok_prix = ok_fond = ok_evt = ok_prof = nb_actions = 0
+    tot = {"prix": 0, "fond": 0, "evt": 0, "avis": 0, "prof": 0, "action": 0}
 
     for i, p in enumerate(instruments):
-        base = i / n
-        t = p.ticker
-        progress(base, f"{t} : prix...")
-        try:
-            res = ds.fetch_prices(t, s.finnhub_api_key, s.fmp_api_key)
-            if res and res.get("quote"):
-                if res.get("history"):
-                    db.upsert_prices(t, res["history"])
-                db.upsert_quote(res["quote"])
-                ok_prix += 1
-                details.append(f"{t} : prix OK ({res['quote'].get('source')}).")
-            else:
-                details.append(f"{t} : prix indisponible (aucune source).")
-        except Exception as e:
-            details.append(f"{t} : erreur prix ({e}).")
-
-        # Fondamentaux + evenements/estimations : actions uniquement (les ETF n'en ont pas).
-        if p.type.lower() == "action":
-            nb_actions += 1
-            progress(base + 0.4 / n, f"{t} : fondamentaux...")
-            try:
-                f = ds.fetch_fundamentals(t, s.finnhub_api_key, s.fmp_api_key)
-                if f:
-                    db.upsert_fundamentals(f)
-                    ok_fond += 1
-                    details.append(f"{t} : fondamentaux OK ({f.get('source')}).")
-                else:
-                    details.append(f"{t} : fondamentaux indisponibles.")
-            except Exception as e:
-                details.append(f"{t} : erreur fondamentaux ({e}).")
-
-            progress(base + 0.7 / n, f"{t} : evenements & estimations...")
-            try:
-                ev = ds.fetch_events_estimates(t)
-                if ev:
-                    db.upsert_events_estimates(ev)
-                    ok_evt += 1
-                    details.append(f"{t} : evenements/estimations OK "
-                                   f"(resultats {ev.get('earnings_date') or 'n/d'}).")
-                else:
-                    details.append(f"{t} : evenements/estimations indisponibles.")
-            except Exception as e:
-                details.append(f"{t} : erreur evenements/estimations ({e}).")
-
-        # Profil / fondamentaux d'affichage : tous les instruments (actions ET ETF).
-        progress(base + 0.85 / n, f"{t} : profil...")
-        try:
-            prof = ds.fetch_profil(t, p.type)
-            if prof:
-                db.upsert_profile(prof["ticker"], prof["asof"], prof["type"],
-                                  json.dumps(prof["payload"], ensure_ascii=False), prof["source"])
-                ok_prof += 1
-            else:
-                details.append(f"{t} : profil indisponible.")
-        except Exception as e:
-            details.append(f"{t} : erreur profil ({e}).")
+        cnt, det = _maj_donnees_instrument(p, s, progress, base=i / n, span=1 / n)
+        for k in tot:
+            tot[k] += cnt[k]
+        details += det
 
     progress(1.0, "Termine.")
     asof = _now()
-    resume = (f"Prix OK {ok_prix}/{n}, fondamentaux {ok_fond}/{nb_actions} actions, "
-              f"evenements {ok_evt}/{nb_actions}, profils {ok_prof}/{n}.")
+    resume = (f"Prix OK {tot['prix']}/{n}, fondamentaux {tot['fond']}/{tot['action']} actions, "
+              f"evenements {tot['evt']}/{tot['action']}, avis analystes {tot['avis']}/{tot['action']}, "
+              f"profils {tot['prof']}/{n}.")
     db.log_update(asof, "donnees", "ok", resume)
     return {"status": "ok", "kind": "donnees", "asof": asof, "resume": resume, "details": details}
+
+
+def update_donnees_instrument(config: AppConfig, ticker: str,
+                              progress: ProgressFn | None = None) -> dict:
+    """Mise a jour des donnees d'UN SEUL instrument (auto-recuperation a la selection).
+
+    N'ecrit PAS dans update_log : la fraicheur globale (briefing, legendes) reste
+    celle de la derniere mise a jour complete ; la fraicheur par instrument se lit
+    dans quotes.asof / profile.asof.
+    """
+    progress = progress or _noop
+    db.init_db()
+    p = next((i for i in config.watchlist if i.ticker == ticker), None)
+    if p is None:
+        return {"status": "erreur", "kind": "donnees_instrument",
+                "resume": f"{ticker} absent de la watchlist.", "details": []}
+    cnt, details = _maj_donnees_instrument(p, config.secrets, progress, base=0.0, span=1.0)
+    progress(1.0, "Termine.")
+    ok = cnt["prix"] or cnt["prof"]
+    return {"status": "ok" if ok else "erreur", "kind": "donnees_instrument",
+            "asof": _now(), "resume": f"{ticker} : "
+            + ("donnees recuperees." if ok else "aucune donnee recuperee."),
+            "details": details}
 
 
 # ==========================================================================

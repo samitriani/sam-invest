@@ -113,6 +113,9 @@ def _entete(config: AppConfig) -> list[str]:
         "semaines, 100 = plus-haut) ; RSI 14 (<30 survendu, >70 surachete).",
         "- **Revisions 30j (net)** = analystes relevant l'EPS − ceux l'abaissant "
         "(negatif = attentes en degradation). **Potentiel %** = objectif moyen vs cours.",
+        "- **Avis des analystes** : consensus = nb d'analystes par avis (achat fort / achat / "
+        "conserver / vendre / vendre fort) ; changements d'avis = 🟢 releve · 🔴 abaisse · "
+        "🆕 initie · ⚪ confirme.",
         "- **🚬** (section Diagnostic) = chiffre marque douteux (aberration ou effet de "
         "change).",
         "",
@@ -230,6 +233,43 @@ def _fondamentaux_lignes(prof: dict) -> list[str]:
     return lignes
 
 
+def _avis_analystes_lignes(ticker: str) -> list[str]:
+    ar = db.get_analyst_ratings(ticker)
+    if not ar:
+        return []
+    out = []
+    if any(ar.get(k) is not None for k in ("strong_buy", "buy", "hold", "sell", "strong_sell")):
+        out.append(
+            "**Avis des analystes** : "
+            f"achat fort {ar.get('strong_buy') or 0:.0f} · achat {ar.get('buy') or 0:.0f} · "
+            f"conserver {ar.get('hold') or 0:.0f} · vendre {ar.get('sell') or 0:.0f} · "
+            f"vendre fort {ar.get('strong_sell') or 0:.0f}."
+        )
+    try:
+        trend = json.loads(ar.get("trend") or "[]")
+    except Exception:
+        trend = []
+    now = next((e for e in trend if e.get("periode") == "0m"), None)
+    prev = next((e for e in trend if e.get("periode") == "-1m"), None)
+    if now and prev:
+        a_now = (now.get("strong_buy") or 0) + (now.get("buy") or 0)
+        a_prev = (prev.get("strong_buy") or 0) + (prev.get("buy") or 0)
+        sens = "en amelioration" if a_now > a_prev else ("en degradation" if a_now < a_prev else "stable")
+        out.append(f"- Tendance vs mois dernier : {sens} ({a_prev:.0f} → {a_now:.0f} avis a l'achat).")
+    try:
+        ups = json.loads(ar.get("upgrades") or "[]")
+    except Exception:
+        ups = []
+    if ups:
+        ico = {"releve": "🟢", "abaisse": "🔴", "initie": "🆕", "confirme": "⚪"}
+        out.append("- Derniers changements d'avis (90 j) :")
+        for u in ups[:8]:
+            de = f" (de {u.get('de')})" if u.get("de") else ""
+            out.append(f"  - {ico.get(u.get('action'), '·')} {u.get('date')} — "
+                       f"{u.get('firme')} : {u.get('action')} vers {u.get('vers') or 'n/d'}{de}")
+    return out
+
+
 def _news_lignes(ticker: str) -> list[str]:
     raw = db.get_news(ticker)
     if not raw:
@@ -307,6 +347,11 @@ def _section_par_instrument(config: AppConfig, data: dict, synth_instruments: di
         prof = db.get_profile(t)
         if prof and prof.get("payload"):
             out += _fondamentaux_lignes(prof)
+            out.append("")
+        # Avis des analystes (actions)
+        avis = _avis_analystes_lignes(t)
+        if avis:
+            out += avis
             out.append("")
         # Flags
         fl = flags_by.get(t, [])

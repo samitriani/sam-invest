@@ -114,8 +114,9 @@ SYNTHESE_SYSTEM = (
     "RECOMMANDATION codee par un fruit ('concombre'=ACHETER, 'orange'=MAINTENIR, "
     "'tomate'=VENDRE) : "
     "(A) 'analyse_chiffres' : ce que disent les chiffres de l'onglet Donnees (cours, "
-    "variations, tendance SMA, RSI, drawdown, fondamentaux, evenements et revisions "
-    "d'estimations) ; "
+    "variations, tendance SMA, RSI, drawdown, fondamentaux, evenements, revisions "
+    "d'estimations, et l'avis des analystes du champ 'avis_analystes' : consensus "
+    "achat/conserver/vendre et derniers changements d'avis par les banques) ; "
     "(B) 'analyse_news' : ce que racontent les news recentes de l'instrument (news_resumees) "
     "et ce qu'elles impliquent ; s'il n'y a pas de news, dis-le en une phrase ; "
     "(C) 'conclusion' : ta conclusion et tes arguments, qui font la SYNTHESE des deux "
@@ -138,11 +139,15 @@ SYNTHESE_SYSTEM = (
 )
 
 
-def synthese_et_reco(secrets: Secrets, donnees_briefing: dict) -> dict | None:
-    """UN seul appel Sonnet : vue d'ensemble + par instrument {fruit + briefing}.
+def synthese_et_reco(secrets: Secrets, donnees_briefing: dict, progress=None) -> dict | None:
+    """UN seul appel Sonnet EN STREAMING : vue d'ensemble + 3 parties par instrument.
 
-    Renvoie {"global": str, "instruments": {ticker: {"fruit": str, "briefing": str}}}
-    ou None si indisponible. Combine l'ancien briefing pedagogique et la reco "fruit".
+    Renvoie {"global": str, "instruments": {ticker: {fruit, analyse_chiffres,
+    analyse_news, conclusion}}} ou None si indisponible.
+
+    Le streaming borne l'appel (timeout explicite), permet une recuperation partielle
+    si la connexion coupe, et - via le callback `progress(nb_caracteres)` - rafraichit
+    l'UI pendant la generation pour maintenir la connexion Streamlit active.
     """
     from .logs import log
 
@@ -152,7 +157,7 @@ def synthese_et_reco(secrets: Secrets, donnees_briefing: dict) -> dict | None:
         return None
 
     n_inst = len(donnees_briefing.get("instruments", []))
-    log(f"synthese_et_reco: appel Sonnet (model={secrets.model_sonnet}, instruments={n_inst})")
+    log(f"synthese_et_reco: appel Sonnet STREAM (model={secrets.model_sonnet}, instruments={n_inst})")
 
     user = (
         "Voici l'etat de fait chiffre de la watchlist (JSON). Reponds STRICTEMENT en JSON avec "
@@ -173,27 +178,40 @@ def synthese_et_reco(secrets: Secrets, donnees_briefing: dict) -> dict | None:
         f"{json.dumps(donnees_briefing, ensure_ascii=False, default=str)}"
     )
 
+    parts: list[str] = []
+    stop = None
     try:
-        resp = client.messages.create(
+        with client.with_options(timeout=120.0).messages.stream(
             model=secrets.model_sonnet,
             max_tokens=16000,
             system=SYNTHESE_SYSTEM,
             messages=[{"role": "user", "content": user}],
-        )
+        ) as stream:
+            for chunk in stream.text_stream:
+                parts.append(chunk)
+                if progress is not None:
+                    try:
+                        progress(sum(len(p) for p in parts))
+                    except Exception:
+                        pass
+            stop = getattr(stream.get_final_message(), "stop_reason", None)
     except Exception as e:
-        log(f"synthese_et_reco: ERREUR appel API: {type(e).__name__}: {e}", "error")
+        log(f"synthese_et_reco: ERREUR appel API (stream): {type(e).__name__}: {e}", "error")
+        # Recuperation partielle si du texte a deja ete recu avant la coupure.
+        partiel = _salvage_combine(_strip_code_fence("".join(parts)))
+        if partiel["instruments"]:
+            log(f"synthese_et_reco: recuperation partielle apres erreur "
+                f"({len(partiel['instruments'])} instruments).", "warning")
+            return partiel
         return None
 
-    try:
-        raw = resp.content[0].text.strip()
-    except Exception as e:
-        log(f"synthese_et_reco: reponse illisible: {e}", "error")
-        return None
-
-    stop = getattr(resp, "stop_reason", None)
+    raw = "".join(parts).strip()
     log(f"synthese_et_reco: reponse recue len={len(raw)} stop_reason={stop}")
     if stop == "max_tokens":
         log("synthese_et_reco: ATTENTION reponse TRONQUEE (max_tokens).", "warning")
+    if not raw:
+        log("synthese_et_reco: reponse vide.", "error")
+        return None
 
     text = _strip_code_fence(raw)
     try:
