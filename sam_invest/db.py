@@ -122,6 +122,13 @@ CREATE TABLE IF NOT EXISTS briefing_cache (
     global        TEXT,                  -- synthese globale (texte)
     instruments   TEXT                   -- JSON {ticker: {fruit, analyse_chiffres, analyse_news, conclusion}}
 );
+
+CREATE TABLE IF NOT EXISTS flags_seen (
+    cle           TEXT PRIMARY KEY,      -- identite stable d'un flag : 'ticker|regle|severite'
+    ticker        TEXT NOT NULL,
+    premiere_vue  TEXT NOT NULL,         -- ISO : 1re apparition de ce flag
+    derniere_vue  TEXT NOT NULL          -- ISO : maj des donnees la plus recente ou il etait present
+);
 """
 
 
@@ -299,6 +306,40 @@ def get_briefing_cache() -> dict | None:
     with get_conn() as conn:
         row = conn.execute("SELECT * FROM briefing_cache WHERE id = 1").fetchone()
         return dict(row) if row else None
+
+
+def enregistrer_flags(flags: list[dict], asof: str) -> None:
+    """Historise les flags courants pour distinguer 'nouveau' et 'persistant'.
+
+    A appeler UNE fois par mise a jour des donnees (jamais a chaque rerun UI).
+    `flags` = [{ticker, regle, severite}, ...]. Un flag est identifie par
+    'ticker|regle|severite'. Un flag deja connu conserve sa premiere_vue ; un
+    flag absent du lot courant est purge (sa reapparition future le remarquera
+    'nouveau'). `derniere_vue` = asof de cette mise a jour des donnees.
+    """
+    cles = {f"{f['ticker']}|{f['regle']}|{f['severite']}": f for f in flags}
+    with get_conn() as conn:
+        existants = {r["cle"] for r in conn.execute("SELECT cle FROM flags_seen").fetchall()}
+        for cle, f in cles.items():
+            if cle in existants:
+                conn.execute("UPDATE flags_seen SET derniere_vue = ? WHERE cle = ?", (asof, cle))
+            else:
+                conn.execute(
+                    "INSERT INTO flags_seen (cle, ticker, premiere_vue, derniere_vue) "
+                    "VALUES (?, ?, ?, ?)",
+                    (cle, f["ticker"], asof, asof),
+                )
+        obsoletes = existants - set(cles)
+        for cle in obsoletes:
+            conn.execute("DELETE FROM flags_seen WHERE cle = ?", (cle,))
+
+
+def anciennete_flags() -> dict[str, dict]:
+    """Lecture seule : {cle 'ticker|regle|severite' -> {premiere_vue, derniere_vue}}."""
+    with get_conn() as conn:
+        rows = conn.execute("SELECT * FROM flags_seen").fetchall()
+        return {r["cle"]: {"premiere_vue": r["premiere_vue"], "derniere_vue": r["derniere_vue"]}
+                for r in rows}
 
 
 # --------------------------------------------------------------------------

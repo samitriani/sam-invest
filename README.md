@@ -21,8 +21,10 @@ C'est une **liste d'instruments a surveiller** : le systeme
   Jamais par un LLM.
 - **Couche jugement** (`sam_invest/llm.py`) : API Claude. Sert **uniquement** a
   resumer/classer les news (Haiku) et a rediger une synthese en langage naturel
-  a partir des chiffres fournis (Sonnet). Claude ne produit jamais un prix, un
-  ratio, ni un verdict acheter/vendre.
+  a partir des chiffres fournis (Sonnet). Claude ne produit jamais un prix ni un
+  ratio. Le briefing propose une reco **indicative** codee par un fruit
+  (🥒 acheter / 🍊 maintenir / 🍅 vendre) : c'est une heuristique de lecture des
+  chiffres et des news, **pas un conseil financier**. La decision reste humaine.
 
 ### Sources de donnees (chaine de repli)
 Pour chaque donnee : **yfinance → Finnhub → Financial Modeling Prep**.

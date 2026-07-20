@@ -82,6 +82,55 @@ def _is_placeholder(value) -> bool:
     return isinstance(value, str) and value.strip().startswith("<") and value.strip().endswith(">")
 
 
+# --- Detection de doublons cross-listing (meme societe, cotation differente) ---
+_SUFFIXES_NOM = ("inc", "corp", "corporation", "ltd", "limited", "plc", "holding",
+                 "holdings", "sa", "nv", "ag", "co", "group", "adr", "class", "cl")
+
+
+def _racine_ticker(ticker: str) -> str:
+    """Racine du ticker avant le suffixe de place (ASML.AS -> ASML)."""
+    return str(ticker).split(".")[0].strip().upper()
+
+
+def _norm_nom(nom: str) -> str:
+    """Nom normalise pour comparaison : minuscules, sans suffixes juridiques ni ponctuation."""
+    import re
+    n = str(nom).lower()
+    for suf in _SUFFIXES_NOM:
+        n = re.sub(rf"\b{suf}\b", "", n)
+    return re.sub(r"[^a-z0-9]", "", n)
+
+
+def _memes_societes(t1: str, n1: str, t2: str, n2: str) -> bool:
+    from difflib import SequenceMatcher
+    if _racine_ticker(t1) == _racine_ticker(t2):
+        return True
+    a, b = _norm_nom(n1), _norm_nom(n2)
+    return bool(a and b and SequenceMatcher(None, a, b).ratio() > 0.85)
+
+
+def doublons_probables(watchlist: list[Instrument]) -> list[tuple[str, str]]:
+    """Paires (ticker_a, ticker_b) probablement identiques dans la watchlist."""
+    items = list(watchlist)
+    pairs: list[tuple[str, str]] = []
+    for i in range(len(items)):
+        for j in range(i + 1, len(items)):
+            a, b = items[i], items[j]
+            if _memes_societes(a.ticker, a.nom, b.ticker, b.nom):
+                pairs.append((a.ticker, b.ticker))
+    return pairs
+
+
+def doublon_pour(ticker: str, nom: str, watchlist: list[Instrument]) -> str | None:
+    """Ticker existant qui semble etre la meme societe qu'un candidat, ou None."""
+    for inst in watchlist:
+        if inst.ticker.upper() == str(ticker).upper():
+            continue
+        if _memes_societes(ticker, nom, inst.ticker, inst.nom):
+            return inst.ticker
+    return None
+
+
 def _norm_type(t: str) -> str:
     t = str(t).strip().lower()
     if t in ("action", "stock", "equity"):

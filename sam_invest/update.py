@@ -149,7 +149,23 @@ def update_donnees(config: AppConfig, progress: ProgressFn | None = None) -> dic
               f"evenements {tot['evt']}/{tot['action']}, avis analystes {tot['avis']}/{tot['action']}, "
               f"profils {tot['prof']}/{n}.")
     db.log_update(asof, "donnees", "ok", resume)
+    _historiser_flags(config, asof)
     return {"status": "ok", "kind": "donnees", "asof": asof, "resume": resume, "details": details}
+
+
+def _historiser_flags(config: AppConfig, asof: str) -> None:
+    """Recalcule les flags (deterministe) et les historise pour l'affichage
+    'nouveau vs persistant'. Ne doit jamais casser une mise a jour de donnees."""
+    try:
+        from . import rules, signals
+        snaps = signals.construire_snapshots(config)
+        flags = rules.tous_les_flags(config, snaps)
+        db.enregistrer_flags(
+            [{"ticker": f.ticker, "regle": f.regle, "severite": f.severite} for f in flags],
+            asof,
+        )
+    except Exception:
+        pass
 
 
 def update_donnees_instrument(config: AppConfig, ticker: str,

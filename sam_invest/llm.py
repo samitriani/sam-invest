@@ -180,6 +180,7 @@ def synthese_et_reco(secrets: Secrets, donnees_briefing: dict, progress=None) ->
 
     parts: list[str] = []
     stop = None
+    _last_notified = 0
     try:
         with client.with_options(timeout=120.0).messages.stream(
             model=secrets.model_sonnet,
@@ -190,10 +191,15 @@ def synthese_et_reco(secrets: Secrets, donnees_briefing: dict, progress=None) ->
             for chunk in stream.text_stream:
                 parts.append(chunk)
                 if progress is not None:
-                    try:
-                        progress(sum(len(p) for p in parts))
-                    except Exception:
-                        pass
+                    # Throttle a ~400 caracteres : le callback recoit le nombre de
+                    # caracteres ET le texte cumule (pour compter les instruments).
+                    total = sum(len(p) for p in parts)
+                    if total - _last_notified >= 400:
+                        _last_notified = total
+                        try:
+                            progress(total, "".join(parts))
+                        except Exception:
+                            pass
             stop = getattr(stream.get_final_message(), "stop_reason", None)
     except Exception as e:
         log(f"synthese_et_reco: ERREUR appel API (stream): {type(e).__name__}: {e}", "error")

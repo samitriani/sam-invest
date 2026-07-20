@@ -32,7 +32,8 @@ from sam_invest import glossaire
 from sam_invest.events import construire_evenements
 from sam_invest.idees import generer_candidats
 from sam_invest.logs import log
-from sam_invest.config import CONFIG_PATH, load_config, save_watchlist
+from sam_invest.config import (CONFIG_PATH, doublon_pour, doublons_probables,
+                               load_config, save_watchlist)
 from sam_invest.update import (update_donnees, update_donnees_instrument,
                                update_global, update_news)
 
@@ -57,6 +58,12 @@ st.markdown(
     "<style>"
     "@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500&display=swap');"
     "code, [data-testid=\"stMetricValue\"]{font-family:'IBM Plex Mono','Courier New',monospace;}"
+    # Mobile : compacte la barre d'onglets pour que les 6 tiennent sans defilement cache.
+    "@media (max-width:640px){"
+    "[data-testid=\"stTabs\"] [role=\"tablist\"]{gap:0.15rem;}"
+    "[data-testid=\"stTabs\"] button[role=\"tab\"]{padding:0.2rem 0.15rem;min-width:0;}"
+    "[data-testid=\"stTabs\"] button[role=\"tab\"] p{font-size:0.68rem;}"
+    "}"
     "</style>",
     unsafe_allow_html=True,
 )
@@ -347,7 +354,8 @@ with head_r:
 
 st.caption(
     "Watchlist personnelle (Tech & emergents). Chiffres et signaux calcules par du "
-    "code (deterministe) ; Claude resume/explique seulement, sans verdict acheter/vendre. "
+    "code (deterministe, jamais par un LLM) ; Claude redige les syntheses et propose "
+    "une reco **indicative** (🥒/🍊/🍅), heuristique de lecture et non conseil financier. "
     "**La decision finale reste humaine.**"
 )
 
@@ -541,7 +549,16 @@ with tab_donnees:
             dfh = pd.DataFrame(hist)
             dfh["date"] = pd.to_datetime(dfh["date"])
             dfh = dfh.set_index("date")
-            st.line_chart(dfh["close"], height=300)
+            # Decimation : quotidien sur ~6 mois recents, hebdomadaire au-dela.
+            # Visuellement identique mais ~2x moins de points rendus (page plus
+            # legere). Les INDICATEURS restent calcules sur l'historique complet.
+            close = dfh["close"]
+            if len(close) > 250:
+                recent = close.iloc[-126:]
+                ancien = close.iloc[:-126].resample("W-FRI").last().dropna()
+                close = pd.concat([ancien, recent])
+                close = close[~close.index.duplicated(keep="last")]
+            st.line_chart(close, height=300)
 
             ind = indicateurs_ligne(choix)
             ci = st.columns(5)
@@ -650,77 +667,100 @@ with tab_briefing:
 
     data = construire_briefing(config)  # deterministe : lit la base, n'appelle pas Claude
 
-    # Generation de la synthese (UN seul appel Sonnet -> global + par instrument).
-    # Doit s'executer AVANT l'affichage pour apparaitre des ce rerun.
-    if btn_synthese:
-        if not (donnees_fraiches and news_fraiches):
-            manquants = ([] if donnees_fraiches else ["Donnees"]) + ([] if news_fraiches else ["News"])
-            st.warning(
-                f"🌿 Avant de generer le briefing, rafraichis d'abord **{' et '.join(manquants)}** "
-                f"(rien de recupere, ou plus vieux que {FRAICHEUR_MAX_H} h). Va dans l'onglet "
-                "concerne et clique « Mettre a jour », ou « Tout mettre a jour » en haut. "
-                "Le briefing sera ainsi base sur des chiffres et des news a jour."
-            )
-            log("[UI] 'Generer le briefing' bloque : donnees/news pas fraiches "
-                f"(donnees_fraiches={donnees_fraiches}, news_fraiches={news_fraiches})", "warning")
-        else:
-            _cache = db.get_briefing_cache()
-            _inchange = (
-                _cache is not None
-                and _cache.get("donnees_asof") == asof_donnees
-                and _cache.get("news_asof") == asof_news
-            )
-            if _inchange:
-                # Donnees ET news identiques a la derniere generation : on evite un
-                # appel Sonnet redondant, on recharge simplement le texte deja genere.
-                st.session_state["synth_global"] = _cache.get("global")
-                try:
-                    st.session_state["synth_instruments"] = json.loads(_cache.get("instruments") or "{}")
-                except Exception:
-                    st.session_state["synth_instruments"] = {}
-                st.session_state["synthese_asof"] = _cache.get("synthese_asof")
-                st.info(f"ℹ️ Donnees et news inchangees depuis le dernier briefing "
-                        f"(genere le {fmt_dt(_cache['generated_at'])}) : texte recupere "
-                        "sans nouvel appel Claude.")
-                log("[UI] 'Generer le briefing': donnees/news inchangees -> cache reutilise "
-                    "(pas d'appel Sonnet).")
-            else:
-                log(f"[UI] clic 'Generer le briefing' (watchlist={len(config.watchlist)}, "
-                    f"instruments_briefing={len(data.get('instruments', []))})")
-                prog_ph = st.empty()
-                prog_ph.info("🧠 Redaction du briefing + reco (Claude Sonnet)…")
-                _prog_state = {"shown": 0}
+    def _generer_briefing() -> None:
+        """UN appel Sonnet (ou reprise du cache si donnees/news inchangees).
 
-                def _prog(n: int) -> None:
-                    # Rafraichit l'UI pendant le stream (feedback + connexion maintenue),
-                    # mais throttle a ~400 caracteres pour ne pas saturer le frontend.
-                    if n - _prog_state["shown"] >= 400:
-                        _prog_state["shown"] = n
-                        prog_ph.info(f"🧠 Redaction du briefing + reco (Claude Sonnet)… "
-                                     f"{n} caracteres recus")
+        Recalcule la fraicheur en interne pour fonctionner aussi bien apres un
+        rafraichissement declenche dans le meme run (bouton combine ci-dessous).
+        """
+        _df, _ad = fraicheur("donnees")
+        _nf, _an = fraicheur("news")
+        _dd = construire_briefing(config)
+        _cache = db.get_briefing_cache()
+        _inchange = (_cache is not None
+                     and _cache.get("donnees_asof") == _ad
+                     and _cache.get("news_asof") == _an)
+        if _inchange:
+            # Donnees ET news identiques a la derniere generation : pas de nouvel
+            # appel Sonnet, on recharge simplement le texte deja genere.
+            st.session_state["synth_global"] = _cache.get("global")
+            try:
+                st.session_state["synth_instruments"] = json.loads(_cache.get("instruments") or "{}")
+            except Exception:
+                st.session_state["synth_instruments"] = {}
+            st.session_state["synthese_asof"] = _cache.get("synthese_asof")
+            st.info(f"ℹ️ Donnees et news inchangees depuis le dernier briefing "
+                    f"(genere le {fmt_dt(_cache['generated_at'])}) : texte recupere "
+                    "sans nouvel appel Claude.")
+            log("[UI] briefing: donnees/news inchangees -> cache reutilise (pas d'appel Sonnet).")
+            return
 
-                res = llm.synthese_et_reco(config.secrets, data, progress=_prog)
-                prog_ph.empty()
-                if res:
-                    st.session_state["synth_global"] = res.get("global")
-                    st.session_state["synth_instruments"] = res.get("instruments", {})
-                    m = db.last_update()
-                    synthese_asof = m["asof"] if m else None
-                    st.session_state["synthese_asof"] = synthese_asof
-                    # Persistance en base (pas seulement session) : recuperation
-                    # cross-appareil + reference pour eviter les appels redondants.
-                    db.save_briefing_cache(
-                        generated_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                        donnees_asof=asof_donnees, news_asof=asof_news,
-                        synthese_asof=synthese_asof,
-                        global_text=res.get("global") or "",
-                        instruments_json=json.dumps(res.get("instruments") or {}, ensure_ascii=False),
-                    )
-                    log(f"[UI] briefing stocke: global={len(res.get('global') or '')} chars, "
-                        f"instruments={len(res.get('instruments') or {})}")
+        log(f"[UI] generation briefing (watchlist={len(config.watchlist)}, "
+            f"instruments={len(_dd.get('instruments', []))})")
+        tickers = [i.ticker for i in config.watchlist]
+        total = max(len(tickers), 1)
+        bar = st.progress(0.0, text="🧠 Redaction du briefing (Claude Sonnet)…")
+        _seen = {"n": -1}
+
+        def _prog(n_chars: int, texte: str = "") -> None:
+            # Progression exprimee en INSTRUMENTS (plus parlant que des caracteres) :
+            # on compte les tickers dont la cle JSON est deja apparue dans le flux.
+            done = sum(1 for tk in tickers if f'"{tk}"' in texte)
+            if done != _seen["n"]:
+                _seen["n"] = done
+                if done == 0:
+                    bar.progress(0.03, text="🧠 Redaction de la vue d'ensemble…")
                 else:
-                    st.error("Briefing indisponible (cle/credit Claude ?). Voir data/sam_invest.log.")
-                    log("[UI] briefing = None -> rien a afficher", "error")
+                    bar.progress(min(done / total, 1.0),
+                                 text=f"🧠 Briefing par instrument… {min(done, total)}/{total}")
+
+        res = llm.synthese_et_reco(config.secrets, _dd, progress=_prog)
+        bar.empty()
+        if res:
+            st.session_state["synth_global"] = res.get("global")
+            st.session_state["synth_instruments"] = res.get("instruments", {})
+            m = db.last_update()
+            synthese_asof = m["asof"] if m else None
+            st.session_state["synthese_asof"] = synthese_asof
+            # Persistance en base (pas seulement session) : recuperation
+            # cross-appareil + reference pour eviter les appels redondants.
+            db.save_briefing_cache(
+                generated_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                donnees_asof=_ad, news_asof=_an, synthese_asof=synthese_asof,
+                global_text=res.get("global") or "",
+                instruments_json=json.dumps(res.get("instruments") or {}, ensure_ascii=False),
+            )
+            log(f"[UI] briefing stocke: global={len(res.get('global') or '')} chars, "
+                f"instruments={len(res.get('instruments') or {})}")
+        else:
+            st.error("Briefing indisponible (cle/credit Claude ?). Voir data/sam_invest.log.")
+            log("[UI] briefing = None -> rien a afficher", "error")
+
+    # Generation de la synthese. Doit s'executer AVANT l'affichage (meme rerun).
+    if btn_synthese and donnees_fraiches and news_fraiches:
+        _generer_briefing()
+
+    # Raccourci quotidien : si donnees/news sont perimees, un seul bouton
+    # rafraichit ce qui manque PUIS genere, sans quitter l'onglet.
+    if (not (donnees_fraiches and news_fraiches)
+            and config.watchlist and config.secrets.anthropic_api_key):
+        manquants = ([] if donnees_fraiches else ["Donnees"]) + ([] if news_fraiches else ["News"])
+        if btn_synthese:
+            st.warning(
+                f"🌿 **{' et '.join(manquants)}** trop anciennes (rien de recupere, ou plus "
+                f"vieux que {FRAICHEUR_MAX_H} h). Utilise le bouton ci-dessous pour tout faire "
+                "en un clic, ou rafraichis l'onglet concerne puis reclique « Generer »."
+            )
+            log("[UI] 'Generer le briefing' : donnees/news pas fraiches "
+                f"(donnees={donnees_fraiches}, news={news_fraiches})", "warning")
+        if st.button(f"🔄 Rafraichir {' + '.join(manquants)} puis generer le briefing",
+                     key="refresh_then_brief", use_container_width=True):
+            if not donnees_fraiches:
+                run_update(update_donnees, "Mise a jour des donnees")
+            if not news_fraiches:
+                run_update(update_news, "Mise a jour des news")
+            _generer_briefing()
+            st.rerun()
 
     # =====================================================================
     # SECTION GLOBAL (big picture)
@@ -732,9 +772,49 @@ with tab_briefing:
     flags_by: dict[str, list] = {}
     for f in flags:
         flags_by.setdefault(f["ticker"], []).append(f)
-    n_al = sum(1 for f in flags if f["severite"] == "alerte")
-    n_if = sum(1 for f in flags if f["severite"] == "info")
-    st.markdown(f"### Vue d'ensemble — {n_al} alerte(s), {n_if} info(s)")
+
+    # Anciennete des flags (nouveau vs persistant) : historise a chaque maj des
+    # donnees. Un flag est "nouveau" s'il est apparu lors de la derniere maj.
+    _anc = db.anciennete_flags()
+    _asof_donnees_raw = (db.last_update("donnees") or {}).get("asof")
+    REGLE_LABEL = {"chute": "chute brutale", "technique": "signal technique",
+                   "degradation": "degradation", "evenement": "evenement",
+                   "revision": "revision d'estimations"}
+
+    def _flag_cle(f) -> str:
+        return f"{f['ticker']}|{f['regle']}|{f['severite']}"
+
+    def _flag_nouveau(f) -> bool:
+        a = _anc.get(_flag_cle(f))
+        return bool(a and _asof_donnees_raw and a["premiere_vue"] == _asof_donnees_raw)
+
+    def _flag_depuis(f) -> str | None:
+        a = _anc.get(_flag_cle(f))
+        return a["premiere_vue"] if a else None
+
+    alertes = [f for f in flags if f["severite"] == "alerte"]
+    infos = [f for f in flags if f["severite"] == "info"]
+    nouvelles = [f for f in alertes if _flag_nouveau(f)]
+    persistantes = [f for f in alertes if not _flag_nouveau(f)]
+    st.markdown(f"### Vue d'ensemble — {len(nouvelles)} nouvelle(s) alerte(s), "
+                f"{len(persistantes)} persistante(s), {len(infos)} info(s)")
+
+    # Nouvelles alertes EN PREMIER (ce qui a change depuis la derniere maj).
+    for f in nouvelles:
+        st.error(f"🆕 🔴 [{REGLE_LABEL.get(f['regle'], f['regle'])}] {f['message']}")
+    # Alertes persistantes regroupees par regle, repliees (deja vues).
+    if persistantes:
+        with st.expander(f"🔁 {len(persistantes)} alerte(s) persistante(s) — deja signalees"):
+            par_regle: dict[str, list] = {}
+            for f in persistantes:
+                par_regle.setdefault(f["regle"], []).append(f)
+            for regle, items in par_regle.items():
+                st.markdown(f"**{REGLE_LABEL.get(regle, regle)}** ({len(items)})")
+                for f in items:
+                    depuis = _flag_depuis(f)
+                    suffix = f" · depuis le {fmt_dt(depuis)}" if depuis else ""
+                    st.caption(f"🔴 {f['message']}{suffix}")
+
     if st.session_state.get("synth_global"):
         if st.session_state.get("synthese_asof"):
             st.caption(f"Synthese basee sur les donnees du {fmt_dt(st.session_state['synthese_asof'])}.")
@@ -770,14 +850,28 @@ with tab_briefing:
                 "« Generer le briefing » en haut de l'onglet. Les chiffres, flags et news "
                 "ci-dessous sont deja disponibles sans appel Claude.")
 
-    for inst in config.watchlist:
+    # Tri : ce qui merite l'attention en haut (nouvelle alerte > alerte > info >
+    # rien), puis par reco (tomate d'abord). L'ordre de la watchlist n'est pas
+    # un ordre de priorite.
+    def _tri_instrument(inst):
+        fl = flags_by.get(inst.ticker, [])
+        has_al = any(f["severite"] == "alerte" for f in fl)
+        nouvelle_al = any(_flag_nouveau(f) for f in fl if f["severite"] == "alerte")
+        sev_rank = 0 if nouvelle_al else (1 if has_al else (2 if fl else 3))
+        fruit = (synth_inst.get(inst.ticker) or {}).get("fruit", "")
+        fruit_rank = {"tomate": 0, "orange": 1, "concombre": 2}.get(fruit, 3)
+        return (sev_rank, fruit_rank, inst.ticker)
+
+    for inst in sorted(config.watchlist, key=_tri_instrument):
         t = inst.ticker
         fl = flags_by.get(t, [])
         has_alerte = any(f["severite"] == "alerte" for f in fl)
         entry = synth_inst.get(t) or {}
         f_emoji, f_label = FRUIT_LABEL.get(entry.get("fruit", ""), ("", ""))
-        # L'icone du volet = la reco si dispo, sinon l'etat des flags.
-        icon = f_emoji or ("🔴" if has_alerte else ("🟡" if fl else "·"))
+        # Reco ET etat des flags cumules : la pastille d'alerte reste TOUJOURS
+        # visible (ne pas la perdre au moment ou le briefing la remplacerait).
+        pastille = "🔴" if has_alerte else ("🟡" if fl else "·")
+        icon = f"{f_emoji} {pastille}".strip() if f_emoji else pastille
         with st.expander(f"{icon} {t} — {inst.nom}"):
             # Reco + briefing en 3 parties EN TETE : coeur de la vue par instrument.
             if f_emoji:
@@ -816,12 +910,16 @@ with tab_briefing:
                     bits.append(f"Potentiel {e['potentiel_pct']:+.0f}%")
                 if bits:
                     st.caption(" · ".join(bits))
-            # Flags de cet instrument
+            # Flags de cet instrument : badge 'nouveau' vs 'depuis le ...'.
             for f in fl:
+                nouveau = _flag_nouveau(f)
+                prefix = "🆕 " if nouveau else ""
+                depuis = _flag_depuis(f)
+                suff = f"  _(depuis le {fmt_dt(depuis)})_" if (not nouveau and depuis) else ""
                 if f["severite"] == "alerte":
-                    st.error(f"🔴 [{f['regle']}] {f['message']}")
+                    st.error(f"{prefix}🔴 [{f['regle']}] {f['message']}{suff}")
                 else:
-                    st.warning(f"🟡 [{f['regle']}] {f['message']}")
+                    st.warning(f"{prefix}🟡 [{f['regle']}] {f['message']}{suff}")
             if not fl:
                 st.caption("Aucun flag.")
             # News recentes de l'instrument (top 4)
@@ -976,6 +1074,12 @@ with tab_idees:
         st.info("Sans cle Finnhub ni cle Claude, aucune source de candidats n'est "
                 "disponible. Ajoute au moins l'une des deux dans `.env`.")
 
+    # Flash des doublons detectes au dernier ajout (survit au st.rerun).
+    for tk, jumeau in st.session_state.pop("idees_doublons_flash", []):
+        st.warning(f"⚠️ {tk} ressemble a {jumeau} deja suivi (meme societe, cotation "
+                   "differente ?). Supprime l'un des deux dans l'onglet Watchlist si "
+                   "c'est un doublon.")
+
     ic1, ic2 = st.columns([3, 1])
     with ic1:
         avec_them = st.checkbox(
@@ -1035,16 +1139,20 @@ with tab_idees:
             rows = [{"ticker": i.ticker, "nom": i.nom, "type": i.type, "theme": i.theme}
                     for i in config.watchlist]
             existants = {i.ticker.upper() for i in config.watchlist}
-            ajoutes = []
+            ajoutes, doublons = [], []
             for lab in choix_ajout:
                 c = labels[lab]
                 if c.ticker.upper() in existants:
                     continue
+                jumeau = doublon_pour(c.ticker, c.nom, config.watchlist)
+                if jumeau:
+                    doublons.append((c.ticker, jumeau))
                 rows.append({"ticker": c.ticker, "nom": c.nom, "type": c.type, "theme": ""})
                 existants.add(c.ticker.upper())
                 ajoutes.append(c.ticker)
             save_watchlist(rows)
             st.session_state["idees_candidats"] = None
+            st.session_state["idees_doublons_flash"] = doublons
             st.success(
                 f"{len(ajoutes)} instrument(s) ajoute(s) : {', '.join(ajoutes)}. "
                 "Pense a renseigner le theme dans l'onglet Watchlist. Les donnees se "
@@ -1112,6 +1220,11 @@ with tab_edit:
         with st.spinner("Recherche (Yahoo)..."):
             st.session_state["search_results"] = search_instruments(q.strip())
 
+    # Flash des doublons detectes au dernier ajout par recherche (survit au rerun).
+    for tk, jumeau in st.session_state.pop("wl_doublons_flash", []):
+        st.warning(f"⚠️ {tk} ressemble a {jumeau} deja suivi (meme societe, cotation "
+                   "differente ?). Supprime l'un des deux ci-dessous si c'est un doublon.")
+
     results = st.session_state.get("search_results")
     if results:
         labels = {f"{r['symbol']} — {r['nom']} ({r['bourse']}, {r['type']})": r for r in results}
@@ -1120,16 +1233,20 @@ with tab_edit:
             existants = {i.ticker.upper() for i in config.watchlist}
             rows = [{"ticker": i.ticker, "nom": i.nom, "type": i.type, "theme": i.theme}
                     for i in config.watchlist]
-            ajout = 0
+            ajout, doublons = 0, []
             for lab in choix:
                 r = labels[lab]
                 if r["symbol"].upper() in existants:
                     continue
+                jumeau = doublon_pour(r["symbol"], r["nom"], config.watchlist)
+                if jumeau:
+                    doublons.append((r["symbol"], jumeau))
                 rows.append({"ticker": r["symbol"], "nom": r["nom"], "type": r["type"], "theme": ""})
                 existants.add(r["symbol"].upper())
                 ajout += 1
             save_watchlist(rows)
             st.session_state["search_results"] = None
+            st.session_state["wl_doublons_flash"] = doublons
             st.success(f"{ajout} instrument(s) ajoute(s). Pense a renseigner le theme ci-dessous.")
             st.rerun()
     elif results == []:
@@ -1137,6 +1254,15 @@ with tab_edit:
                    "son ticker (ex : « invesco qqq », « QQQ ») — les indices sont exclus.")
 
     st.divider()
+
+    # Audit permanent des doublons cross-listing (meme societe, cotation differente).
+    _paires = doublons_probables(config.watchlist)
+    if _paires:
+        st.warning("⚠️ Doublons probables (meme societe suivie plusieurs fois — double "
+                   "consommation d'API/Claude) : "
+                   + " · ".join(f"**{a}** ↔ **{b}**" for a, b in _paires)
+                   + ". Supprime l'une des lignes ci-dessous si c'est bien un doublon.")
+
     st.markdown("##### Watchlist actuelle (edition directe)")
 
     df_wl = pd.DataFrame(

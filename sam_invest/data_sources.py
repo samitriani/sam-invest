@@ -46,6 +46,35 @@ def _safe_float(x) -> float | None:
         return None
 
 
+def _debt_to_equity_yf(tk, info: dict) -> float | None:
+    """Ratio dette/capitaux propres (en x, ex: 1.8) depuis yfinance.
+
+    Priorite au calcul direct sur le bilan (Total Debt / Stockholders Equity) :
+    c'est un FAIT chiffre par le code, sans ambiguite d'unite. A defaut, on
+    utilise info['debtToEquity'] qui est TOUJOURS exprime en pourcentage par
+    Yahoo (ex: 180 = 1.8x, 6.55 = 0.0655x) -> division systematique par 100.
+    L'ancienne heuristique 'diviser seulement si > 10' produisait de fausses
+    alertes pour les societes peu endettees (D/E reel entre 2% et 10%).
+    """
+    # 1. Calcul direct depuis le bilan (source de verite).
+    try:
+        bs = tk.balance_sheet
+        if bs is not None and not bs.empty:
+            col = bs.iloc[:, 0]  # exercice le plus recent
+            debt = _safe_float(col.get("Total Debt"))
+            equity = _safe_float(col.get("Stockholders Equity")
+                                 or col.get("Total Stockholder Equity"))
+            if debt is not None and equity not in (None, 0):
+                return debt / equity
+    except Exception:
+        pass
+    # 2. Repli : info['debtToEquity'] est un pourcentage -> /100 systematique.
+    de = _safe_float(info.get("debtToEquity"))
+    if de is not None:
+        return de / 100.0
+    return None
+
+
 def _news_id(ticker: str, headline: str, url: str) -> str:
     h = hashlib.md5(f"{ticker}|{headline}|{url}".encode("utf-8")).hexdigest()
     return h
@@ -245,10 +274,7 @@ def _fundamentals_yfinance(ticker: str) -> dict | None:
         rg = _safe_float(info.get("revenueGrowth"))
         if rg is not None:
             f["revenue_growth"] = rg * 100.0
-        f["debt_to_equity"] = _safe_float(info.get("debtToEquity"))
-        # yfinance exprime parfois debtToEquity en % (ex: 180 = 1.8x).
-        if f["debt_to_equity"] is not None and f["debt_to_equity"] > 10:
-            f["debt_to_equity"] = f["debt_to_equity"] / 100.0
+        f["debt_to_equity"] = _debt_to_equity_yf(t, info)
         f["revenue_ttm"] = _safe_float(info.get("totalRevenue"))
 
         # Repli sur les etats financiers annuels pour la croissance CA si absente.
@@ -648,9 +674,7 @@ def fetch_profil(ticker: str, type_: str) -> dict | None:
             info = {}
 
         if type_.lower() == "action":
-            de = _safe_float(info.get("debtToEquity"))
-            if de is not None and de > 10:  # yfinance exprime parfois en % (180 = 1.8x)
-                de = de / 100.0
+            de = _debt_to_equity_yf(tk, info)
             payload = {
                 "marketCap": _safe_float(info.get("marketCap")),
                 "sector": info.get("sector"),
