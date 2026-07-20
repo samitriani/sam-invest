@@ -296,6 +296,69 @@ def _salvage_combine(text: str) -> dict:
 
 
 # ==========================================================================
+# Sonnet - idees d'ajout a la watchlist (trous thematiques)
+# --------------------------------------------------------------------------
+# Claude propose des TICKERS pour combler des trous de diversification ; il ne
+# calcule ni ne cite AUCUN chiffre (le code verifie chaque ticker par une
+# recherche Yahoo puis calcule ses chiffres reels - garde-fou anti-hallucination
+# dans sam_invest/idees.py::evaluer_candidat).
+# ==========================================================================
+IDEES_SYSTEM = (
+    "Tu aides un investisseur particulier a COMPLETER sa watchlist (actions + ETF, "
+    "themes Tech et pays emergents). On te donne la liste ACTUELLE de ses instruments "
+    "suivis (ticker, type, theme). "
+    "Ta tache : identifier 2 a 4 'trous' de diversification (concentration excessive "
+    "sur un theme/une zone geographique, secteur complementaire absent...) et proposer, "
+    "pour chaque trou, 1 a 2 tickers d'instruments BOURSIERS REELS ET CONNUS (action ou "
+    "ETF cote) qui pourraient le combler. "
+    "REGLES STRICTES : "
+    "(1) Propose UNIQUEMENT des tickers d'instruments cotes reels et bien etablis. Si tu "
+    "n'es pas certain qu'un ticker existe reellement, NE LE PROPOSE PAS. "
+    "(2) N'invente, ne cite ni ne calcule AUCUN chiffre (prix, capitalisation, "
+    "performance, ratio) : justifie uniquement par le positionnement thematique, "
+    "sectoriel ou geographique. Le code verifiera et calculera tout le reste. "
+    "(3) N'inclus JAMAIS un ticker deja present dans la liste fournie. "
+    "(4) Reponds STRICTEMENT en JSON : une liste d'objets "
+    "{\"ticker\": \"...\", \"trou_identifie\": \"...\", \"raison\": \"...\"}. Rien d'autre autour."
+)
+
+
+def generer_idees_thematiques(secrets: Secrets, contexte: dict, max_idees: int = 8) -> list[dict]:
+    """Suggestions de tickers Claude pour combler des trous de diversification.
+
+    Renvoie [] si indisponible ou en cas d'erreur (jamais d'exception). CHAQUE
+    suggestion doit ensuite etre validee par le code avant tout affichage/ajout.
+    """
+    from .logs import log
+
+    client = _client(secrets)
+    if client is None:
+        return []
+
+    user = (
+        "Voici la watchlist actuelle (JSON) : instruments suivis + repartition par theme. "
+        f"Propose au maximum {max_idees} tickers candidats au total, repartis sur les trous "
+        "identifies. Reponds STRICTEMENT par un tableau JSON "
+        "[{\"ticker\", \"trou_identifie\", \"raison\"}], sans texte autour.\n\n"
+        f"{json.dumps(contexte, ensure_ascii=False)}"
+    )
+    try:
+        resp = client.messages.create(
+            model=secrets.model_sonnet,
+            max_tokens=2000,
+            system=IDEES_SYSTEM,
+            messages=[{"role": "user", "content": user}],
+        )
+        text = _strip_code_fence(resp.content[0].text.strip())
+        data = json.loads(text)
+        if isinstance(data, list):
+            return [d for d in data if isinstance(d, dict) and d.get("ticker")]
+    except Exception as e:
+        log(f"generer_idees_thematiques: erreur ({type(e).__name__}: {e})", "error")
+    return []
+
+
+# ==========================================================================
 # Opus 4.8 - diagnostic financier (conclusions par etape + exec summary)
 # --------------------------------------------------------------------------
 # Streaming : le texte s'affiche au fil de l'eau (pas d'effet "tunnel").

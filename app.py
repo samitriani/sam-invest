@@ -17,6 +17,7 @@ Separation stricte : chiffres/signaux = code deterministe ; texte = Claude (llm.
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 
 import pandas as pd
@@ -29,12 +30,26 @@ from sam_invest.data_sources import search_instruments
 from sam_invest.diagnostic import construire_diagnostic
 from sam_invest import glossaire
 from sam_invest.events import construire_evenements
+from sam_invest.idees import generer_candidats
 from sam_invest.logs import log
 from sam_invest.config import CONFIG_PATH, load_config, save_watchlist
 from sam_invest.update import (update_donnees, update_donnees_instrument,
                                update_global, update_news)
 
 st.set_page_config(page_title="Sam_Invest", page_icon="📊", layout="wide")
+
+# --- Pont secrets Streamlit Cloud -> variables d'environnement ---
+# En local, .env est charge par python-dotenv (config.load_secrets). Sur Streamlit
+# Community Cloud il n'y a pas de .env (fichier gitignore, jamais deploye) : les
+# secrets sont saisis dans le dashboard et exposes via st.secrets. Ce pont permet a
+# load_secrets() de fonctionner a l'identique dans les deux environnements (un seul
+# code path : os.getenv). Sans fichier secrets.toml (dev local), st.secrets est vide
+# ou leve une exception selon la version : on ignore silencieusement dans ce cas.
+try:
+    for _k, _v in st.secrets.items():
+        os.environ.setdefault(_k, str(_v))
+except Exception:
+    pass
 
 # Touche de police minimale : chiffres/valeurs en monospace (IBM Plex Mono).
 # Volontairement reduit a 2 selecteurs, sans transition ni mise en page (perf safe).
@@ -54,6 +69,7 @@ st.session_state.setdefault("synth_global", None)
 st.session_state.setdefault("synth_instruments", {})  # {ticker: {fruit, analyse_chiffres, analyse_news, conclusion}}
 st.session_state.setdefault("synthese_asof", None)
 st.session_state.setdefault("search_results", None)
+st.session_state.setdefault("idees_candidats", None)
 
 # Code couleur des recommandations (verdict "fruit").
 FRUIT_LABEL = {"concombre": ("🥒", "Acheter"), "orange": ("🍊", "Maintenir"),
@@ -348,8 +364,8 @@ if btn_global:
 # ==========================================================================
 # Onglets
 # ==========================================================================
-tab_donnees, tab_news, tab_briefing, tab_diag, tab_edit = st.tabs(
-    ["📈 Donnees", "📰 News", "🧠 Briefing", "🔬 Diagnostic", "✏️ Watchlist"]
+tab_donnees, tab_news, tab_briefing, tab_diag, tab_idees, tab_edit = st.tabs(
+    ["📈 Donnees", "📰 News", "🧠 Briefing", "🔬 Diagnostic", "💡 Idees", "✏️ Watchlist"]
 )
 
 
@@ -897,6 +913,126 @@ with tab_diag:
 
 
 # --------------------------------------------------------------------------
+# ONGLET IDEES : recommandations d'ajout a la watchlist
+# --------------------------------------------------------------------------
+# Deux sources de candidats : pairs Finnhub (deterministe) + trous thematiques
+# (Claude Sonnet, texte uniquement). CHAQUE ticker candidat est ensuite VALIDE
+# (recherche Yahoo) et CHIFFRE en direct par le code avant tout affichage -
+# aucun chiffre ni ticker invente n'atteint l'utilisateur sans verification.
+# --------------------------------------------------------------------------
+with tab_idees:
+    st.markdown(
+        "**Idees d'ajout a la watchlist** — combine des entreprises comparables "
+        "(pairs Finnhub) et des suggestions Claude pour combler des trous de "
+        "diversification thematique. Chaque candidat est ensuite **valide** (recherche "
+        "Yahoo) et **chiffre en direct** par le code, exactement comme l'onglet Donnees : "
+        "aucun ticker ni chiffre invente n'est affiche."
+    )
+    if not config.secrets.finnhub_api_key and not config.secrets.anthropic_api_key:
+        st.info("Sans cle Finnhub ni cle Claude, aucune source de candidats n'est "
+                "disponible. Ajoute au moins l'une des deux dans `.env`.")
+
+    ic1, ic2 = st.columns([3, 1])
+    with ic1:
+        avec_them = st.checkbox(
+            "Inclure les suggestions thematiques (Claude Sonnet)",
+            value=bool(config.secrets.anthropic_api_key),
+            disabled=not config.secrets.anthropic_api_key,
+            help="Claude propose des tickers pour combler des trous de diversification ; "
+                 "il ne calcule aucun chiffre, seul le code valide et chiffre chaque ticker.",
+        )
+        if not config.secrets.finnhub_api_key:
+            st.caption("⚠️ Sans cle Finnhub : pas de candidats 'pairs', "
+                       "seulement les suggestions thematiques Claude (si activees).")
+    with ic2:
+        btn_idees = st.button(
+            "💡 Generer des idees", use_container_width=True,
+            disabled=not config.watchlist
+            or not (config.secrets.finnhub_api_key or config.secrets.anthropic_api_key),
+        )
+
+    if btn_idees:
+        log(f"[UI] clic 'Generer des idees' (avec_thematiques={avec_them})")
+        with st.spinner("Recherche de candidats (pairs + Claude) puis verification "
+                        "des chiffres..."):
+            candidats = generer_candidats(config, avec_thematiques=avec_them)
+        st.session_state["idees_candidats"] = candidats
+        log(f"[UI] Generer des idees: {len(candidats)} candidat(s) retenu(s)")
+
+    candidats = st.session_state.get("idees_candidats")
+    if candidats is None:
+        st.caption("Clique sur « Generer des idees » pour voir des candidats.")
+    elif not candidats:
+        st.info("Aucun candidat retenu : soit aucune source disponible, soit tous les "
+                "tickers trouves/suggeres etaient deja suivis ou introuvables.")
+    else:
+        st.markdown(f"### {len(candidats)} candidat(s)")
+        st.dataframe(
+            pd.DataFrame([
+                {"Ticker": c.ticker, "Nom": c.nom, "Type": c.type, "Origine": c.origine,
+                 "Cours": c.last_price, "Seance %": c.change_pct,
+                 "Drawdown 52s %": c.drawdown_pct, "RSI 14": c.rsi_14, "Tendance": c.tendance}
+                for c in candidats
+            ]),
+            use_container_width=True, hide_index=True,
+            column_config={
+                "Cours": st.column_config.NumberColumn(format="%.2f"),
+                "Seance %": st.column_config.NumberColumn(format="%.1f"),
+                "Drawdown 52s %": st.column_config.NumberColumn(format="%.1f"),
+                "RSI 14": st.column_config.NumberColumn(format="%.0f"),
+            },
+        )
+
+        labels = {f"{c.ticker} — {c.nom} ({c.origine})": c for c in candidats}
+        choix_ajout = st.multiselect(
+            "Selectionne les instruments a ajouter a la watchlist :", list(labels.keys())
+        )
+        if st.button("➕ Ajouter a la watchlist", disabled=not choix_ajout):
+            rows = [{"ticker": i.ticker, "nom": i.nom, "type": i.type, "theme": i.theme}
+                    for i in config.watchlist]
+            existants = {i.ticker.upper() for i in config.watchlist}
+            ajoutes = []
+            for lab in choix_ajout:
+                c = labels[lab]
+                if c.ticker.upper() in existants:
+                    continue
+                rows.append({"ticker": c.ticker, "nom": c.nom, "type": c.type, "theme": ""})
+                existants.add(c.ticker.upper())
+                ajoutes.append(c.ticker)
+            save_watchlist(rows)
+            st.session_state["idees_candidats"] = None
+            st.success(
+                f"{len(ajoutes)} instrument(s) ajoute(s) : {', '.join(ajoutes)}. "
+                "Pense a renseigner le theme dans l'onglet Watchlist. Les donnees se "
+                "rempliront automatiquement a la premiere visite de l'onglet Donnees."
+            )
+            st.rerun()
+
+        st.divider()
+        for c in candidats:
+            with st.expander(f"{c.ticker} — {c.nom} ({c.type} · {c.bourse or 'n/d'})"):
+                st.caption(f"Origine : {c.origine}. {c.raison}")
+                mc = st.columns(5)
+                mh(mc[0], "Cours", _fmt(c.last_price))
+                mh(mc[1], "Seance %", _fmt(c.change_pct, 1))
+                mh(mc[2], "RSI 14", _fmt(c.rsi_14, 0))
+                mh(mc[3], "Tendance", c.tendance)
+                mh(mc[4], "Drawdown 52s", _fmt(c.drawdown_pct, 1))
+                if c.type.lower() == "action":
+                    fc = st.columns(4)
+                    mh(fc[0], "Secteur", c.sector or "n/d")
+                    mh(fc[1], "PER (trailing)", _fmt(c.per))
+                    mh(fc[2], "Croissance CA", _pct_frac(c.revenue_growth))
+                    mh(fc[3], "Marge nette", _pct_frac(c.net_margin))
+                    if c.consensus_achat is not None:
+                        st.caption(
+                            f"Consensus analystes : achat {c.consensus_achat:.0f} · "
+                            f"conserver {(c.consensus_conserver or 0):.0f} · "
+                            f"vendre {(c.consensus_vendre or 0):.0f}."
+                        )
+
+
+# --------------------------------------------------------------------------
 # ONGLET WATCHLIST : edition simple (ajouter / retirer / modifier des lignes)
 # --------------------------------------------------------------------------
 with tab_edit:
@@ -906,8 +1042,19 @@ with tab_edit:
         mtime = CONFIG_PATH.stat().st_mtime if CONFIG_PATH.exists() else None
     except OSError:
         mtime = None
-    st.caption(f"🕒 Watchlist enregistree le : **{fmt_dt(mtime) if mtime else 'jamais'}** "
-               f"(fichier config.yaml).")
+    wc1, wc2 = st.columns([3, 1])
+    with wc1:
+        st.caption(f"🕒 Watchlist enregistree le : **{fmt_dt(mtime) if mtime else 'jamais'}** "
+                   f"(fichier config.yaml).")
+    with wc2:
+        if CONFIG_PATH.exists():
+            st.download_button(
+                "⬇️ Telecharger config.yaml", data=CONFIG_PATH.read_bytes(),
+                file_name="config.yaml", mime="text/yaml", use_container_width=True,
+                help="Si l'app tourne en ligne (Streamlit Cloud), le disque est "
+                     "reinitialise a chaque redeploiement : telecharge ce fichier apres "
+                     "toute modification pour la reintegrer a ton depot GitHub.",
+            )
 
     # --- Recherche par nom (pas besoin de connaitre les tickers) ---
     st.markdown("#### 🔎 Rechercher un instrument")
@@ -1012,6 +1159,7 @@ try:
         synth_global=st.session_state.get("synth_global"),
         synth_instruments=st.session_state.get("synth_instruments"),
         diag_result=st.session_state.get("diag_result"),
+        idees_candidats=st.session_state.get("idees_candidats"),
     )
     export_slot.download_button(
         "⬇️ Exporter (.md)",
@@ -1020,7 +1168,7 @@ try:
         mime="text/markdown",
         use_container_width=True,
         disabled=not config.watchlist,
-        help="Exporte toutes les donnees (Donnees, News, Briefing, Diagnostic) en un "
+        help="Exporte toutes les donnees (Donnees, News, Briefing, Diagnostic, Idees) en un "
              "Markdown unique, pret a coller a Claude pour analyse.",
     )
 except Exception as e:  # l'export ne doit jamais casser l'app

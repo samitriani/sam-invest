@@ -1,6 +1,8 @@
-# Secrets et config perso
+# Secrets
 .env
-config.yaml
+
+# config.yaml EST versionne (watchlist + regles, aucun secret dedans) : c'est la
+# reference deployee sur Streamlit Cloud. Modifie-le librement, il est suivi par git.
 
 # Base de donnees locale
 *.db

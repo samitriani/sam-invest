@@ -6,10 +6,13 @@ Assemble en un seul fichier .md, pensé pour etre recolle a Claude ensuite :
   - onglet Donnees : tableau signaux (actions/ETF) + calendrier & estimations ;
   - onglet News : news brutes + classement Haiku (categorie/tonalite/traduction) ;
   - onglet Briefing : synthese globale + briefing 3 parties + reco par instrument ;
-  - onglet Diagnostic : dernier diagnostic de la session (si realise).
+  - onglet Diagnostic : dernier diagnostic de la session (si realise) ;
+  - onglet Idees : candidats d'ajout a la watchlist generes durant la session
+    (si l'utilisateur a clique sur « Generer des idees »).
 
-Tout est DETERMINISTE cote chiffres (lu en base) ; les textes de synthese
-proviennent de Claude et sont repris tels quels. Aucun appel LLM ici.
+Tout est DETERMINISTE cote chiffres (lu en base, ou calcule en direct pour les
+candidats Idees) ; les textes de synthese proviennent de Claude et sont repris
+tels quels. Aucun appel LLM ici.
 """
 
 from __future__ import annotations
@@ -425,6 +428,38 @@ def _section_diagnostic(diag_result: dict | None) -> list[str]:
     return out
 
 
+def _section_idees(candidats: list | None) -> list[str]:
+    if not candidats:
+        return []
+    out = ["## 6. Idees d'ajout a la watchlist (session)", ""]
+    for c in candidats:
+        out.append(f"### {c.ticker} — {c.nom} ({c.type} · {c.bourse or 'n/d'})")
+        out.append(f"_Origine_ : {c.origine}. {c.raison}")
+        out.append("")
+        out.append(
+            f"**Chiffres cles** : cours {_fmt(c.last_price)} · "
+            f"seance {_pct_raw(c.change_pct)} · RSI {_fmt(c.rsi_14, 0)} · "
+            f"tendance {c.tendance} · drawdown 52s {_pct_raw(c.drawdown_pct)}."
+        )
+        if c.type.lower() == "action":
+            out.append(
+                f"**Fondamentaux** : secteur {c.sector or 'n/d'} · PER {_fmt(c.per)} · "
+                f"croissance CA {_pct_frac(c.revenue_growth)} · "
+                f"marge nette {_pct_frac(c.net_margin)} · "
+                f"dette/capitaux {_fmt(c.debt_to_equity)}."
+            )
+            if c.consensus_achat is not None:
+                out.append(
+                    f"**Consensus analystes** : achat {c.consensus_achat:.0f} · "
+                    f"conserver {(c.consensus_conserver or 0):.0f} · "
+                    f"vendre {(c.consensus_vendre or 0):.0f}."
+                )
+        out.append("")
+        out.append("---")
+        out.append("")
+    return out
+
+
 # --------------------------------------------------------------------------
 # Point d'entree
 # --------------------------------------------------------------------------
@@ -434,12 +469,13 @@ def construire_export_md(
     synth_global: str | None = None,
     synth_instruments: dict | None = None,
     diag_result: dict | None = None,
+    idees_candidats: list | None = None,
 ) -> str:
     """Assemble tout l'etat de l'app en un document Markdown unique.
 
     `data` = sortie de construire_briefing (recalculee si None). `synth_global`,
-    `synth_instruments` et `diag_result` proviennent de la session Streamlit
-    (None si rien n'a ete genere).
+    `synth_instruments`, `diag_result` et `idees_candidats` proviennent de la
+    session Streamlit (None/vide si rien n'a ete genere).
     """
     if data is None:
         data = construire_briefing(config)
@@ -452,4 +488,5 @@ def construire_export_md(
     lignes += _section_briefing_global(synth_global, synth_instruments)
     lignes += _section_par_instrument(config, data, synth_instruments)
     lignes += _section_diagnostic(diag_result)
+    lignes += _section_idees(idees_candidats)
     return "\n".join(lignes).rstrip() + "\n"

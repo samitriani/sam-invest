@@ -1,0 +1,170 @@
+# ============================================================================
+# Sam_Invest - WATCHLIST (pre-remplie : 20 instruments Tech & emergents)
+# ----------------------------------------------------------------------------
+# Watchlist d'exemple, 100% reconfigurable : ajoute/retire/modifie les lignes.
+# Les cles API vont dans .env, jamais ici.
+# Voir config.template.yaml pour la doc detaillee de chaque champ/regle.
+# ============================================================================
+
+devise: "EUR"
+
+# ============================================================================
+# WATCHLIST : 10 actions + 10 ETF, orientation Tech & pays emergents.
+# type = "action" | "ETF" ; theme = etiquette libre de regroupement.
+# ============================================================================
+watchlist:
+  - ticker: "NVDA"
+    nom: "Nvidia"
+    type: "action"
+    theme: "Tech"
+  - ticker: "MSFT"
+    nom: "Microsoft"
+    type: "action"
+    theme: "Tech"
+  - ticker: "AAPL"
+    nom: "Apple"
+    type: "action"
+    theme: "Tech"
+  - ticker: "ASML"
+    nom: "ASML Holding"
+    type: "action"
+    theme: "Tech (semis Europe)"
+  - ticker: "TSM"
+    nom: "Taiwan Semiconductor (TSMC)"
+    type: "action"
+    theme: "Tech & Emergents"
+  - ticker: "BABA"
+    nom: "Alibaba"
+    type: "action"
+    theme: "Emergents (Chine)"
+  - ticker: "TCEHY"
+    nom: "Tencent (ADR)"
+    type: "action"
+    theme: "Emergents (Chine)"
+  - ticker: "MELI"
+    nom: "MercadoLibre"
+    type: "action"
+    theme: "Emergents (Amerique latine)"
+  - ticker: "INFY"
+    nom: "Infosys"
+    type: "action"
+    theme: "Emergents (Inde)"
+  - ticker: "SE"
+    nom: "Sea Limited"
+    type: "action"
+    theme: "Emergents (Asie du Sud-Est)"
+  - ticker: "QQQ"
+    nom: "Invesco Nasdaq-100"
+    type: "ETF"
+    theme: "Tech"
+  - ticker: "SMH"
+    nom: "VanEck Semiconductor"
+    type: "ETF"
+    theme: "Tech (semis)"
+  - ticker: "SOXX"
+    nom: "iShares Semiconductor"
+    type: "ETF"
+    theme: "Tech (semis)"
+  - ticker: "IGV"
+    nom: "iShares Expanded Tech-Software"
+    type: "ETF"
+    theme: "Tech (software)"
+  - ticker: "ARKK"
+    nom: "ARK Innovation"
+    type: "ETF"
+    theme: "Tech (innovation)"
+  - ticker: "EEM"
+    nom: "iShares MSCI Emerging Markets"
+    type: "ETF"
+    theme: "Emergents (global)"
+  - ticker: "VWO"
+    nom: "Vanguard FTSE Emerging Markets"
+    type: "ETF"
+    theme: "Emergents (global)"
+  - ticker: "INDA"
+    nom: "iShares MSCI India"
+    type: "ETF"
+    theme: "Emergents (Inde)"
+  - ticker: "FXI"
+    nom: "iShares China Large-Cap"
+    type: "ETF"
+    theme: "Emergents (Chine)"
+  - ticker: "EWZ"
+    nom: "iShares MSCI Brazil"
+    type: "ETF"
+    theme: "Emergents (Bresil)"
+  - ticker: "IWDA.AS"
+    nom: "iShares Core MSCI World UCITS E"
+    type: "ETF"
+    theme: ""
+  - ticker: "MU"
+    nom: "Micron Technology, Inc."
+    type: "action"
+    theme: ""
+  - ticker: "AVGO"
+    nom: "Broadcom Inc."
+    type: "action"
+    theme: ""
+  - ticker: "ASML.AS"
+    nom: "ASML HOLDING"
+    type: "action"
+    theme: ""
+
+# ============================================================================
+# REGLE 1 - Flag de chute brutale (signal d'attention)
+# ============================================================================
+flag_chute:
+  seuil_seance_pct: -7
+  seuil_drawdown_52s_pct: -20
+
+# ============================================================================
+# REGLE 2 - Signaux techniques
+# ============================================================================
+signaux_techniques:
+  rsi_survente: 30
+  rsi_surachat: 70
+  seuil_proche_bas_52s_pct: 10
+  flags_actifs: true
+
+# ============================================================================
+# REGLE 3 - Alarme de degradation (ACTIONS UNIQUEMENT)
+# ============================================================================
+degradation_actions:
+  croissance_ca_min_pct:
+    actif: true
+    seuil: 0
+  marge_nette_min_pct:
+    actif: true
+    seuil: 5
+  dette_sur_capitaux_max:
+    actif: true
+    seuil: 2.0
+
+# ============================================================================
+# REGLE 4 - Evenements a venir (resultats / ex-dividende)
+# ----------------------------------------------------------------------------
+# Leve un flag d'attention quand un evenement approche. Utile avant un versement
+# DCA : "est-ce que je verse juste avant des resultats ?". Actions uniquement
+# (les ETF n'ont pas de date de resultats).
+# ============================================================================
+evenements:
+  resultats_dans_jours: 7          # flag si resultats dans <= N jours
+  exdiv_dans_jours: 7              # (affiche dans le tableau ; pas de flag par defaut)
+
+# ============================================================================
+# REGLE 5 - Revisions d'estimations (ACTIONS UNIQUEMENT) - signal AVANCE
+# ----------------------------------------------------------------------------
+# Regarde la REVISION des attentes futures (combien d'analystes relevent vs
+# abaissent leurs estimations d'EPS sur 30 jours), plutot que le realise passe.
+# Signal plus precoce d'une these qui s'effrite. Donnee via yfinance.
+# ============================================================================
+revisions_estimations:
+  actif: true
+  seuil_net_revisions_30j: 0       # alerte si (hausses - baisses) sur 30j < ce seuil
+
+# ============================================================================
+# NEWS
+# ============================================================================
+news:
+  max_par_ticker: 10
+  anciennete_max_jours: 14

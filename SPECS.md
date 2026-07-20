@@ -55,7 +55,7 @@ toujours accompagné d'une définition (tooltips glossaire). Langue : **françai
 - **Front** : React 18 + Vite + TypeScript, Tailwind CSS, shadcn/ui, TanStack Query
   (data fetching/cache), Recharts (graphiques). SPA, pas de SSR.
 - **Back** : FastAPI qui enveloppe le package `sam_invest/` existant
-  (data_sources, signals, indicators, rules, briefing, diagnostic, llm, db).
+  (data_sources, signals, indicators, rules, briefing, diagnostic, idees, llm, db).
 - **Base** : SQLite locale (`data/sam_invest.db`), inchangée.
 - **Secrets** : `.env` côté back uniquement (ANTHROPIC_API_KEY, FINNHUB_API_KEY,
   FMP_API_KEY). **Aucune clé n'atteint le navigateur.**
@@ -232,7 +232,49 @@ watchlist). Chiffres = code ; conclusions = **Claude Opus, streamées**.
 **États** : pas de clé API → bandeau bloquant ; recherche vide → suggestion ;
 erreur de récupération → message d'erreur.
 
-### 4.5 Écran « Watchlist » (édition)
+### 4.5 Écran « Idées » (recommandations d'ajout à la watchlist)
+
+Recommandations d'instruments à AJOUTER à la watchlist. Deux sources de
+candidats combinées, puis **validation + chiffrage systématiques par le code**
+avant tout affichage (garde-fou anti-hallucination).
+
+**Sources de candidats**
+1. **Pairs (Finnhub, déterministe, sans LLM)** : pour chaque action suivie,
+   endpoint `/stock/peers` → entreprises comparables. Exclut les tickers déjà
+   suivis, limité par source et au total.
+2. **Trous thématiques (Claude Sonnet, texte seul)** : à partir de la
+   répartition par thème de la watchlist actuelle, Claude identifie 2 à 4 trous
+   de diversification (concentration excessive, zone/secteur absent) et propose
+   1 à 2 tickers réels par trou. Claude ne cite ni ne calcule AUCUN chiffre —
+   uniquement le positionnement thématique.
+
+**Validation + chiffrage (obligatoire, quelle que soit l'origine)**
+- Chaque ticker candidat est d'abord **résolu par une recherche Yahoo** ; s'il
+  ne correspond à aucun instrument réel connu, il est silencieusement écarté
+  (protège des tickers Claude mal formés ou inexistants).
+- Les candidats retenus sont ensuite **chiffrés en direct** par le même code que
+  l'onglet Données (cours, variation séance, drawdown 52s, RSI 14, tendance
+  SMA50/200, et pour les actions : secteur, PER, croissance CA, marge nette,
+  dette/capitaux, consensus analystes) — **sans écriture en base** (ce ne sont
+  que des candidats, pas encore suivis).
+
+**Actions utilisateur**
+- Case à cocher « Inclure les suggestions thématiques » (désactivée sans clé
+  Claude) + bouton « Générer des idées » (désactivé sans watchlist, ou sans
+  aucune des deux clés Finnhub/Claude).
+- Tableau récapitulatif des candidats (mêmes colonnes que l'onglet Données) +
+  volet repliable par candidat (origine, justification, chiffres, fondamentaux,
+  consensus).
+- Multi-sélection + bouton **« Ajouter à la watchlist »** : réutilise
+  `save_watchlist` (comme l'onglet Watchlist). Les données du nouvel instrument
+  se remplissent automatiquement à la première visite de l'onglet Données
+  (auto-récupération, voir 4.1 Bloc 3).
+
+**États** : ni clé Finnhub ni clé Claude → bandeau, bouton désactivé ; aucun
+candidat retenu (sources indisponibles ou tickers déjà suivis/introuvables) →
+message explicite.
+
+### 4.6 Écran « Watchlist » (édition)
 
 - Horodatage de dernier enregistrement (config.yaml).
 - **Recherche d'instrument** par nom ou ticker (Yahoo Search, actions + ETF,
@@ -305,6 +347,7 @@ minimaliste**). Rappel des fondamentaux :
 | POST | `/api/briefing/generer` | Synthèse Sonnet — **SSE** (streaming) |
 | GET | `/api/diagnostic/search?q=` | Recherche d'entreprise |
 | POST | `/api/diagnostic/{ticker}` | Diagnostic — chiffres immédiats puis conclusions **SSE** |
+| POST | `/api/idees/generer` | Candidats d'ajout (pairs + trous thématiques), validés/chiffrés |
 | GET | `/api/glossaire` | Dictionnaire terme → définition |
 | GET | `/api/updates/last` | Horodatages des dernières maj par type |
 

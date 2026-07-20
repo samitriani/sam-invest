@@ -70,7 +70,7 @@ Apres ca, **plus jamais de ligne de commande**.
 **Double-clique sur `launch_windows.bat`** → le navigateur s'ouvre sur l'app.
 Pour arreter : ferme la fenetre noire.
 
-### 4 onglets (+ bouton « Tout mettre a jour » en haut a droite)
+### 6 onglets (+ bouton « Tout mettre a jour » en haut a droite)
 Chaque onglet a son propre bouton de mise a jour et affiche sa derniere date/heure,
 pour maitriser la consommation d'API Claude :
 
@@ -96,6 +96,21 @@ pour maitriser la consommation d'API Claude :
   appel Sonnet couvre le global ET tous les instruments. Un avertissement rappelle que
   la reco est une heuristique du LLM, **pas un conseil financier** — la decision reste
   humaine.
+- **🔬 Diagnostic** _(Claude Opus 4.8, a la demande)_ : recherche une entreprise
+  (Yahoo), calcule un diagnostic financier complet (marges, ROE/ROA/ROIC, WACC/EVA,
+  structure financiere, cash, croissance, valorisation) et redige une conclusion par
+  etape + un executive summary avec preconisation (streaming, affichage progressif).
+  Actions uniquement.
+- **💡 Idees** _(Claude Sonnet, a la demande)_ : recommandations d'ajout a la
+  watchlist. Combine des **pairs Finnhub** (entreprises comparables aux actions
+  suivies, deterministe) et des **suggestions thematiques Claude** (trous de
+  diversification : theme/zone sous-representee). Chaque ticker candidat, quelle
+  que soit son origine, est d'abord **valide** par une recherche Yahoo puis
+  **chiffre en direct** par le meme code que l'onglet Donnees (cours, tendance, RSI,
+  fondamentaux, consensus analystes) — aucun ticker ni chiffre invente n'est
+  affiche. Bouton **« Ajouter a la watchlist »** en un clic ; les donnees du
+  nouvel instrument se rempliront automatiquement a la premiere visite de
+  l'onglet Donnees.
 - **✏️ Watchlist** : **recherche par nom** (« air liquide » → `AI.PA`) via Yahoo,
   sans connaitre les tickers ; + edition directe de la liste. Enregistree dans
   config.yaml sans toucher aux regles.
@@ -138,15 +153,51 @@ sont ignores sans erreur.
 - Declenchement **100 % manuel** : aucun cron, aucune planification, aucun ordre passe.
 - Watchlist de suivi : aucune quantite, aucun PRU, aucune position detenue.
 
+## Deploiement en ligne (Streamlit Community Cloud)
+
+Usage **personnel uniquement** (pas d'authentification multi-utilisateur). Gratuit,
+zero serveur a gerer, deploiement direct depuis GitHub.
+
+**Une fois, dans le dashboard Streamlit Cloud :**
+1. Va sur [share.streamlit.io](https://share.streamlit.io), connecte-toi avec GitHub,
+   autorise l'acces au depot `samitriani/sam-invest` (fonctionne avec un depot prive).
+2. « New app » → repo `samitriani/sam-invest`, branche `main`, fichier `app.py`.
+3. Avant (ou apres) le deploiement, ouvre **Settings → Secrets** et colle :
+   ```toml
+   ANTHROPIC_API_KEY = "sk-ant-..."
+   FINNHUB_API_KEY = "..."
+   ```
+   (mêmes valeurs que ton `.env` local ; jamais dans le depot Git).
+4. Choisis la version Python la plus recente proposee (3.11/3.12) dans les
+   parametres avances si demande.
+5. Deploie, attends l'installation de `requirements.txt`, puis ouvre l'URL et
+   clique **« Tout mettre a jour »** pour verifier que yfinance/Finnhub
+   repondent bien depuis le cloud.
+6. Optionnel mais recommande : **Settings → Sharing** → restreins l'acces a ton
+   seul email, pour eviter qu'une URL publique fasse consommer ton credit
+   Claude par un tiers.
+
+**A savoir (compromis du plan gratuit, acceptes pour un usage perso simple) :**
+- Le disque est **reinitialise a chaque redeploiement** (nouveau `git push`) et
+  parfois apres une longue inactivite : la base `data/sam_invest.db` (cache
+  prix/news/fondamentaux) est perdue — reclique juste sur « Tout mettre a jour »,
+  tout est re-telechargeable, rien n'est perdu de facon permanente.
+- Si tu modifies la watchlist **depuis l'app en ligne**, ce changement ne
+  survivra PAS au prochain redeploiement : utilise le bouton **« ⬇️ Telecharger
+  config.yaml »** (onglet Watchlist) juste apres modification, puis remplace le
+  fichier dans ton depot local et commit/push.
+- `config.yaml` est **versionne dans Git** (aucun secret dedans : juste tickers/
+  noms/themes/seuils) — c'est la reference qui alimente le deploiement.
+
 ## Fichiers
 
 | Fichier / dossier | Role |
 |---|---|
 | `app.py` | Interface Streamlit (un seul processus) |
-| `config.yaml` | **Ta** watchlist + tes regles (pre-rempli, editable) |
+| `config.yaml` | **Ta** watchlist + tes regles (versionne, editable, aucun secret) |
 | `config.template.yaml` | Template commente de reference |
-| `.env` | Cles API (jamais versionne) |
-| `data/sam_invest.db` | Base SQLite locale |
+| `.env` | Cles API (jamais versionne ; en ligne : Secrets Streamlit Cloud) |
+| `data/sam_invest.db` | Base SQLite locale (cache, jamais versionnee) |
 | `sam_invest/signals.py` | Snapshot marche + signaux techniques (deterministe) |
 | `sam_invest/rules.py` | Les 3 regles |
 | `sam_invest/llm.py` | Couche jugement (Claude) |

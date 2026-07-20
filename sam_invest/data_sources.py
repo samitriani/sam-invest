@@ -573,6 +573,30 @@ def fetch_analyst_ratings(ticker: str, max_upgrades: int = 15,
 
 
 # ==========================================================================
+# PAIRS (entreprises comparables)  --  Finnhub uniquement
+# --------------------------------------------------------------------------
+# Sert de source deterministe de candidats pour l'onglet Idees (aucun LLM).
+# ==========================================================================
+def fetch_peers(ticker: str, finnhub_key: str) -> list[str]:
+    """Tickers d'entreprises comparables (Finnhub). [] si cle absente/echec."""
+    if not finnhub_key:
+        return []
+    try:
+        r = requests.get(
+            f"{FINNHUB_BASE}/stock/peers",
+            params={"symbol": ticker, "token": finnhub_key}, timeout=HTTP_TIMEOUT,
+        )
+        if not r.ok:
+            return []
+        data = r.json()
+        if isinstance(data, list):
+            return [str(t).strip() for t in data if t]
+    except Exception:
+        pass
+    return []
+
+
+# ==========================================================================
 # ETATS FINANCIERS (diagnostic)  --  yfinance
 # --------------------------------------------------------------------------
 # Compte de resultat + bilan + cash-flow (annuels, ~5 ans) + info. Sert au
