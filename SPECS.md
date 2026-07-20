@@ -76,6 +76,7 @@ toujours accompagné d'une définition (tooltips glossaire). Langue : **françai
 | `news` | id, ticker, datetime, headline, summary, url, source | id |
 | `news_analysis` | Payload JSON : [{headline, categorie, tonalite, resume, titre_fr, resume_fr}] | ticker |
 | `update_log` | Journal des mises à jour (asof, kind, statut, detail) | id |
+| `briefing_cache` | Dernier briefing Sonnet généré (global + par instrument) + horodatages donnees/news au moment de la génération — persistant, récupération cross-appareil | 1 ligne |
 
 **Watchlist** : stockée dans `config.yaml` (pas en base). Un instrument =
 `{ticker, nom, type: "action"|"ETF", theme}`.
@@ -179,6 +180,17 @@ pour tout, déclenché explicitement.
 - **Garde-fou de fraîcheur** : au clic, si les données ou les news datent de plus de
   2 h (ou n'ont jamais été récupérées), aucun appel Sonnet n'est lancé ; un message
   invite gentiment à rafraîchir l'onglet concerné d'abord.
+- **Cache persistant, sans appel redondant** : le briefing généré est enregistré en
+  base (table `briefing_cache`), pas seulement dans la session du navigateur.
+  - **Récupération cross-appareil** : à l'ouverture de l'onglet, si cette session
+    n'affiche encore rien (nouvel appareil/navigateur), le dernier briefing généré
+    est rechargé automatiquement depuis la base — sans appel Claude.
+  - **Anti-doublon** : au clic sur « Générer le briefing », si les données ET les news
+    n'ont pas changé depuis la dernière génération (comparaison des horodatages
+    `donnees_asof`/`news_asof` mémorisés), le texte déjà généré est simplement
+    rechargé (message « Données et news inchangées… ») — aucun nouvel appel Sonnet,
+    aucun coût. Un nouvel appel n'a lieu que si Données ou News ont été rafraîchies
+    depuis.
 - Légende du code reco : 🥒 acheter · 🍊 maintenir · 🍅 vendre + disclaimer
   « heuristique LLM, pas un conseil financier ».
 

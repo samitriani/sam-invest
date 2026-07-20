@@ -635,6 +635,19 @@ with tab_briefing:
     st.caption("Code reco : 🥒 acheter · 🍊 maintenir · 🍅 vendre. "
                "⚠️ Heuristique generee par le LLM, **pas un conseil financier** — la decision reste tienne.")
 
+    # --- Recuperation cross-appareil : le briefing genere est persiste en base (pas
+    # seulement en session). Si cette session (nouvel appareil/navigateur) n'a encore
+    # rien affiche, on recharge le dernier briefing genere - SANS appel Claude.
+    if not st.session_state.get("synth_global") and not st.session_state.get("synth_instruments"):
+        _cache = db.get_briefing_cache()
+        if _cache and _cache.get("global"):
+            st.session_state["synth_global"] = _cache.get("global")
+            try:
+                st.session_state["synth_instruments"] = json.loads(_cache.get("instruments") or "{}")
+            except Exception:
+                st.session_state["synth_instruments"] = {}
+            st.session_state["synthese_asof"] = _cache.get("synthese_asof")
+
     data = construire_briefing(config)  # deterministe : lit la base, n'appelle pas Claude
 
     # Generation de la synthese (UN seul appel Sonnet -> global + par instrument).
@@ -651,32 +664,63 @@ with tab_briefing:
             log("[UI] 'Generer le briefing' bloque : donnees/news pas fraiches "
                 f"(donnees_fraiches={donnees_fraiches}, news_fraiches={news_fraiches})", "warning")
         else:
-            log(f"[UI] clic 'Generer le briefing' (watchlist={len(config.watchlist)}, "
-                f"instruments_briefing={len(data.get('instruments', []))})")
-            prog_ph = st.empty()
-            prog_ph.info("🧠 Redaction du briefing + reco (Claude Sonnet)…")
-            _prog_state = {"shown": 0}
-
-            def _prog(n: int) -> None:
-                # Rafraichit l'UI pendant le stream (feedback + connexion maintenue),
-                # mais throttle a ~400 caracteres pour ne pas saturer le frontend.
-                if n - _prog_state["shown"] >= 400:
-                    _prog_state["shown"] = n
-                    prog_ph.info(f"🧠 Redaction du briefing + reco (Claude Sonnet)… "
-                                 f"{n} caracteres recus")
-
-            res = llm.synthese_et_reco(config.secrets, data, progress=_prog)
-            prog_ph.empty()
-            if res:
-                st.session_state["synth_global"] = res.get("global")
-                st.session_state["synth_instruments"] = res.get("instruments", {})
-                m = db.last_update()
-                st.session_state["synthese_asof"] = (m["asof"] if m else None)
-                log(f"[UI] briefing stocke: global={len(res.get('global') or '')} chars, "
-                    f"instruments={len(res.get('instruments') or {})}")
+            _cache = db.get_briefing_cache()
+            _inchange = (
+                _cache is not None
+                and _cache.get("donnees_asof") == asof_donnees
+                and _cache.get("news_asof") == asof_news
+            )
+            if _inchange:
+                # Donnees ET news identiques a la derniere generation : on evite un
+                # appel Sonnet redondant, on recharge simplement le texte deja genere.
+                st.session_state["synth_global"] = _cache.get("global")
+                try:
+                    st.session_state["synth_instruments"] = json.loads(_cache.get("instruments") or "{}")
+                except Exception:
+                    st.session_state["synth_instruments"] = {}
+                st.session_state["synthese_asof"] = _cache.get("synthese_asof")
+                st.info(f"ℹ️ Donnees et news inchangees depuis le dernier briefing "
+                        f"(genere le {fmt_dt(_cache['generated_at'])}) : texte recupere "
+                        "sans nouvel appel Claude.")
+                log("[UI] 'Generer le briefing': donnees/news inchangees -> cache reutilise "
+                    "(pas d'appel Sonnet).")
             else:
-                st.error("Briefing indisponible (cle/credit Claude ?). Voir data/sam_invest.log.")
-                log("[UI] briefing = None -> rien a afficher", "error")
+                log(f"[UI] clic 'Generer le briefing' (watchlist={len(config.watchlist)}, "
+                    f"instruments_briefing={len(data.get('instruments', []))})")
+                prog_ph = st.empty()
+                prog_ph.info("🧠 Redaction du briefing + reco (Claude Sonnet)…")
+                _prog_state = {"shown": 0}
+
+                def _prog(n: int) -> None:
+                    # Rafraichit l'UI pendant le stream (feedback + connexion maintenue),
+                    # mais throttle a ~400 caracteres pour ne pas saturer le frontend.
+                    if n - _prog_state["shown"] >= 400:
+                        _prog_state["shown"] = n
+                        prog_ph.info(f"🧠 Redaction du briefing + reco (Claude Sonnet)… "
+                                     f"{n} caracteres recus")
+
+                res = llm.synthese_et_reco(config.secrets, data, progress=_prog)
+                prog_ph.empty()
+                if res:
+                    st.session_state["synth_global"] = res.get("global")
+                    st.session_state["synth_instruments"] = res.get("instruments", {})
+                    m = db.last_update()
+                    synthese_asof = m["asof"] if m else None
+                    st.session_state["synthese_asof"] = synthese_asof
+                    # Persistance en base (pas seulement session) : recuperation
+                    # cross-appareil + reference pour eviter les appels redondants.
+                    db.save_briefing_cache(
+                        generated_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                        donnees_asof=asof_donnees, news_asof=asof_news,
+                        synthese_asof=synthese_asof,
+                        global_text=res.get("global") or "",
+                        instruments_json=json.dumps(res.get("instruments") or {}, ensure_ascii=False),
+                    )
+                    log(f"[UI] briefing stocke: global={len(res.get('global') or '')} chars, "
+                        f"instruments={len(res.get('instruments') or {})}")
+                else:
+                    st.error("Briefing indisponible (cle/credit Claude ?). Voir data/sam_invest.log.")
+                    log("[UI] briefing = None -> rien a afficher", "error")
 
     # =====================================================================
     # SECTION GLOBAL (big picture)

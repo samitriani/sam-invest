@@ -8,6 +8,7 @@ Couche donnees pure. Tables :
   - news            : news brutes recuperees.
   - news_analysis   : sortie de la couche jugement (Claude) - clairement separee.
   - update_log      : journal des mises a jour.
+  - briefing_cache  : dernier briefing Sonnet genere (persistant, cross-appareil).
 """
 
 from __future__ import annotations
@@ -110,6 +111,16 @@ CREATE TABLE IF NOT EXISTS update_log (
     kind    TEXT,                 -- 'donnees' | 'news' | 'global'
     status  TEXT,
     detail  TEXT
+);
+
+CREATE TABLE IF NOT EXISTS briefing_cache (
+    id            INTEGER PRIMARY KEY,   -- toujours 1 : un seul briefing en cache
+    generated_at  TEXT NOT NULL,         -- horodatage de l'appel Sonnet
+    donnees_asof  TEXT,                  -- last_update('donnees').asof au moment de la generation
+    news_asof     TEXT,                  -- last_update('news').asof au moment de la generation
+    synthese_asof TEXT,                  -- horodatage affiche a l'utilisateur ("base sur les donnees du...")
+    global        TEXT,                  -- synthese globale (texte)
+    instruments   TEXT                   -- JSON {ticker: {fruit, analyse_chiffres, analyse_news, conclusion}}
 );
 """
 
@@ -265,6 +276,29 @@ def log_update(asof: str, kind: str, status: str, detail: str) -> None:
             "INSERT INTO update_log (asof, kind, status, detail) VALUES (?, ?, ?, ?)",
             (asof, kind, status, detail),
         )
+
+
+def save_briefing_cache(generated_at: str, donnees_asof: str | None, news_asof: str | None,
+                        synthese_asof: str | None, global_text: str, instruments_json: str) -> None:
+    """Persiste le dernier briefing genere (base, pas session) : recuperation cross-appareil
+    et detection de generation redondante (donnees/news inchangees depuis la derniere fois)."""
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO briefing_cache
+               (id, generated_at, donnees_asof, news_asof, synthese_asof, global, instruments)
+               VALUES (1, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET
+                 generated_at=excluded.generated_at, donnees_asof=excluded.donnees_asof,
+                 news_asof=excluded.news_asof, synthese_asof=excluded.synthese_asof,
+                 global=excluded.global, instruments=excluded.instruments""",
+            (generated_at, donnees_asof, news_asof, synthese_asof, global_text, instruments_json),
+        )
+
+
+def get_briefing_cache() -> dict | None:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM briefing_cache WHERE id = 1").fetchone()
+        return dict(row) if row else None
 
 
 # --------------------------------------------------------------------------
