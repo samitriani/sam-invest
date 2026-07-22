@@ -941,18 +941,34 @@ with tab_briefing:
 # Affichage PROGRESSIF (pas d'effet tunnel) : chiffres instantanes + conclusions
 # streamees par etape ; executive summary rempli en haut a la fin.
 # --------------------------------------------------------------------------
-def _rendre_etape_chiffres(etape: dict) -> None:
-    # Tableau HTML pour que chaque indicateur porte un tooltip <abbr> (definition).
+def _fmt_date_iso(s) -> str:
+    """'2025-12-31' -> '31/12/2025' (tolerant : renvoie '' ou l'entree si non ISO)."""
+    try:
+        y, m, d = str(s)[:10].split("-")
+        return f"{d}/{m}/{y}"
+    except Exception:
+        return str(s) if s else ""
+
+
+def _rendre_etape_chiffres(etape: dict, date_exo: str = "", date_maj: str = "") -> None:
+    # Tableau HTML : chaque libelle porte un tooltip <abbr> (definition) et, pour
+    # les indicateurs calcules, la colonne Source porte un tooltip avec la FORMULE
+    # + la date de la donnee (cloture d'exercice, ou jour de recuperation pour les
+    # multiples de valorisation qui refletent le cours du jour).
     st.markdown(f"#### {etape['titre']}")
+    date_txt = date_maj if etape.get("id") == "valorisation" else date_exo
     lignes = []
     for ligne in etape["lignes"]:
         valeur = f"🚬 {ligne['valeur']}" if ligne.get("doute") else ligne["valeur"]
         src = "yfinance" if ligne["source"] == "yfinance" else "calculé"
+        src_html = glossaire.formule_abbr(ligne["label"], src)  # tooltip formule si calculé
+        if date_txt:
+            src_html += f" · {date_txt}"
         lignes.append(
             "<tr>"
             f"<td style='padding:3px 16px 3px 0'>{glossaire.abbr(ligne['label'])}</td>"
             f"<td style='padding:3px 16px;font-family:monospace;white-space:nowrap'>{valeur}</td>"
-            f"<td style='padding:3px 0;color:#8a8a8a;font-size:0.82em'>{src}</td>"
+            f"<td style='padding:3px 0;color:#8a8a8a;font-size:0.82em'>{src_html}</td>"
             "</tr>"
         )
     st.markdown("<table style='width:100%;border-collapse:collapse'>"
@@ -963,14 +979,15 @@ def _entete_diag(diag: dict) -> None:
     st.subheader(f"{diag.get('nom')} ({diag.get('ticker')})"
                  + (f" · {diag['devise']}" if diag.get("devise") else ""))
     annee, dref = diag.get("annee"), diag.get("date_reference")
-    exo = (f"Exercice {annee}" + (f" (cloture {dref})" if dref else "")) if annee else (dref or "date n/d")
+    exo = (f"Exercice {annee}" + (f" (cloture {_fmt_date_iso(dref)})" if dref else "")) if annee else (dref or "date n/d")
+    d_maj = _fmt_date_iso(diag.get("date_recuperation"))
     h = diag.get("hypotheses", {})
-    st.caption(f"📅 Chiffres : **{exo}** (source yfinance). "
+    st.caption(f"📅 Comptable : **{exo}** · Cours/multiples recuperes le **{d_maj}** (source yfinance). "
                f"WACC estime : taux sans risque {h.get('taux_sans_risque', 0) * 100:.1f}% · "
                f"prime {h.get('prime_marche', 0) * 100:.1f}% · "
                f"beta {h.get('beta') if h.get('beta') is not None else 'n/d'}. "
-               "Colonne « Source » : yfinance (brut) / calculé (formule) ; conclusions = LLM (Opus 4.8). "
-               "🚬 = chiffre douteux (aberration ou change).")
+               "Colonne « Source » : survole **calculé** pour voir la formule, avec la date de la donnee ; "
+               "conclusions = LLM (Opus 4.8). 🚬 = chiffre douteux (aberration ou change).")
     if diag.get("note_fiabilite"):
         st.warning(diag["note_fiabilite"])
 
@@ -982,8 +999,10 @@ def _rendre_diag_statique(r: dict) -> None:
     st.caption("🤖 LLM · Claude Opus 4.8")
     st.markdown(r.get("resume") or "")
     st.divider()
+    d_exo = _fmt_date_iso(diag.get("date_reference"))
+    d_maj = _fmt_date_iso(diag.get("date_recuperation"))
     for etape in diag["etapes"]:
-        _rendre_etape_chiffres(etape)
+        _rendre_etape_chiffres(etape, d_exo, d_maj)
         concl = r["conclusions"].get(etape["id"])
         if concl:
             st.caption("🤖 Conclusion — LLM · Claude Opus 4.8")
@@ -1035,8 +1054,10 @@ with tab_diag:
             summary_ph.info("Executive summary : genere apres les etapes ci-dessous...")
             st.divider()
             conclusions = {}
+            d_exo = _fmt_date_iso(diag.get("date_reference"))
+            d_maj = _fmt_date_iso(diag.get("date_recuperation"))
             for etape in diag["etapes"]:
-                _rendre_etape_chiffres(etape)
+                _rendre_etape_chiffres(etape, d_exo, d_maj)
                 st.caption("🤖 Conclusion — LLM · Claude Opus 4.8")
                 conclusions[etape["id"]] = st.write_stream(
                     llm.conclusion_etape_stream(config.secrets, etape["titre"], etape["lignes"])

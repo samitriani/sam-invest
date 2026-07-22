@@ -83,8 +83,51 @@ GLOSSAIRE: dict[str, str] = {
     "Revisions": "Nombre d'analystes relevant vs abaissant leurs previsions de benefice (solde net sur 30 jours).",
 }
 
+# --------------------------------------------------------------------------
+# Formules des indicateurs CALCULES du diagnostic (transparence : mouse-over).
+# Cle = terme reconnu dans le libelle (meme matching que le glossaire, plus
+# long d'abord). Seuls les indicateurs calcules par le code ont une formule ;
+# les donnees brutes yfinance n'en ont pas (source affichee = "yfinance").
+# --------------------------------------------------------------------------
+FORMULES: dict[str, str] = {
+    # Marges & activite
+    "Croissance du CA": "CA(N) / CA(N-1) − 1",
+    "Marge brute": "marge brute / chiffre d'affaires",
+    "Marge operationnelle": "resultat d'exploitation / chiffre d'affaires",
+    "Marge nette": "resultat net / chiffre d'affaires",
+    # Rentabilite (ROIC - WACC avant ROIC/WACC : plus long d'abord)
+    "ROIC - WACC": "ROIC − WACC",
+    "ROE": "resultat net / capitaux propres (fin d'exercice)",
+    "ROA": "resultat net / total des actifs",
+    "ROIC": "NOPAT / capital investi",
+    "NOPAT": "EBIT × (1 − taux d'impot)",
+    # Creation de valeur
+    "Cout des capitaux propres": "taux sans risque + beta × prime de risque (CAPM)",
+    "Cout de la dette": "(charges d'interets / dette) × (1 − taux d'impot)",
+    "WACC": "poids CP × cout des CP + poids dette × cout de la dette net d'impot",
+    "EVA": "(ROIC − WACC) × capital investi",
+    # Structure financiere (Dette nette / EBITDA avant Dette nette)
+    "Dette / capitaux propres": "dette totale / capitaux propres",
+    "Dette nette / EBITDA": "(dette totale − tresorerie) / EBITDA",
+    "Dette nette": "dette totale − tresorerie",
+    "Couverture des interets": "EBIT / charges d'interets",
+    "Current ratio": "actifs courants / passifs courants",
+    # Generation de cash (FCF / dette nette avant les autres)
+    "FCF / dette nette": "free cash flow / dette nette",
+    "Marge de FCF": "free cash flow / chiffre d'affaires",
+    "Free cash flow": "flux de tresorerie operationnel + capex (capex negatif)",
+    # Croissance
+    "CAGR du CA": "(CA final / CA initial)^(1 / nb annees) − 1",
+    "CAGR du benefice net": "(resultat net final / initial)^(1 / nb annees) − 1",
+    # Valorisation (multiples calcules ; PER et VE/EBITDA viennent bruts de yfinance)
+    "Price / Book": "capitalisation / capitaux propres",
+    "Price / Sales": "capitalisation / chiffre d'affaires",
+    "Rendement du FCF": "free cash flow / capitalisation",
+}
+
 # Cles triees par longueur decroissante (plus specifique d'abord).
 _KEYS = sorted(GLOSSAIRE.keys(), key=len, reverse=True)
+_FORMULE_KEYS = sorted(FORMULES.keys(), key=len, reverse=True)
 
 
 def _norm(s: str) -> str:
@@ -93,6 +136,7 @@ def _norm(s: str) -> str:
 
 
 _NORM_KEYS = [(k, _norm(k)) for k in _KEYS]
+_NORM_FORMULE_KEYS = [(k, _norm(k)) for k in _FORMULE_KEYS]
 
 
 def definition(label: str | None) -> str | None:
@@ -104,6 +148,27 @@ def definition(label: str | None) -> str | None:
         if re.search(r"\b" + re.escape(nk) + r"\b", nl):
             return GLOSSAIRE[term]
     return None
+
+
+def formule(label: str | None) -> str | None:
+    """Formule de l'indicateur calcule detecte dans `label`, ou None (donnee brute)."""
+    if not label:
+        return None
+    nl = _norm(str(label))
+    for term, nk in _NORM_FORMULE_KEYS:
+        if re.search(r"\b" + re.escape(nk) + r"\b", nl):
+            return FORMULES[term]
+    return None
+
+
+def formule_abbr(label: str, texte: str) -> str:
+    """HTML : `texte` avec tooltip <abbr> montrant la formule, si l'indicateur est calcule."""
+    f = formule(label)
+    if not f:
+        return html.escape(str(texte))
+    return (f'<abbr title="{html.escape(f, quote=True)}" '
+            f'style="text-decoration:underline dotted #9aa;cursor:help">'
+            f'{html.escape(str(texte))}</abbr>')
 
 
 def abbr(label: str) -> str:

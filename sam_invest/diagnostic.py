@@ -13,6 +13,7 @@ Fiabilite reduite si la devise des etats differe de la devise de cotation.
 from __future__ import annotations
 
 import math
+from datetime import date
 
 from . import data_sources as ds
 from .config import AppConfig
@@ -273,7 +274,8 @@ def construire_diagnostic(config: AppConfig, ticker: str) -> dict:
         "nom": data.get("nom", ticker),
         "devise": dev,
         "annee": annee,
-        "date_reference": date_ref,
+        "date_reference": date_ref,       # cloture de l'exercice (base des chiffres comptables)
+        "date_recuperation": date.today().isoformat(),  # jour de la recuperation (cours/multiples live)
         "note_fiabilite": note,
         "hypotheses": {"taux_sans_risque": rf, "prime_marche": prime, "beta": beta},
         "etapes": etapes,
