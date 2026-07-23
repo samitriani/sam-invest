@@ -389,6 +389,75 @@ def search_instruments(query: str, max_results: int = 8) -> list[dict]:
     return _search_yahoo_endpoint(query, max_results)
 
 
+# --- Suggestion automatique d'etiquette "theme" a partir des donnees Yahoo ---
+# Le theme est renseigne tout seul a l'ajout (secteur / pays / categorie), pour
+# ne pas laisser la colonne vide. C'est un DEFAUT modifiable, jamais un LLM.
+_SECTEUR_FR = {
+    "technology": "Tech",
+    "financial services": "Finance",
+    "healthcare": "Sante",
+    "consumer cyclical": "Conso cyclique",
+    "consumer defensive": "Conso defensive",
+    "industrials": "Industrie",
+    "energy": "Energie",
+    "basic materials": "Materiaux",
+    "communication services": "Communication",
+    "utilities": "Services publics",
+    "real estate": "Immobilier",
+}
+
+# Pays consideres "emergents" (yfinance `country`, en anglais) -> nom FR.
+_PAYS_EMERGENTS = {
+    "china": "Chine", "hong kong": "Chine", "india": "Inde", "brazil": "Bresil",
+    "taiwan": "Taiwan", "south korea": "Coree du Sud", "argentina": "Argentine",
+    "mexico": "Mexique", "indonesia": "Indonesie", "turkey": "Turquie",
+    "south africa": "Afrique du Sud", "thailand": "Thailande", "malaysia": "Malaisie",
+    "philippines": "Philippines", "vietnam": "Vietnam", "saudi arabia": "Arabie Saoudite",
+    "united arab emirates": "Emirats", "poland": "Pologne", "chile": "Chili",
+    "colombia": "Colombie", "peru": "Perou", "egypt": "Egypte", "nigeria": "Nigeria",
+    "qatar": "Qatar", "kuwait": "Koweit", "singapore": "Asie du Sud-Est",
+}
+
+
+def suggest_theme(ticker: str, type_: str) -> str:
+    """Devine une etiquette 'theme' depuis Yahoo (secteur / pays / categorie).
+
+    Best-effort : renvoie "" si rien d'exploitable. Ne plante jamais (une colonne
+    vide vaut mieux qu'une erreur). Une seule requete `.info`.
+    """
+    if yf is None:
+        return ""
+    try:
+        info = yf.Ticker(ticker).info or {}
+    except Exception:
+        return ""
+
+    # Priorite au pays quand il est emergent (aligne sur la taxonomie de l'utilisateur).
+    country = str(info.get("country") or "").strip().lower()
+    if country in _PAYS_EMERGENTS:
+        return f"Emergents ({_PAYS_EMERGENTS[country]})"
+
+    if (type_ or "").lower() == "action":
+        industry = str(info.get("industry") or "").lower()
+        if "semiconductor" in industry:
+            return "Tech (semis)"
+        sector = str(info.get("sector") or "").strip()
+        return _SECTEUR_FR.get(sector.lower(), sector)
+
+    # ETF : on lit la categorie Morningstar exposee par Yahoo.
+    cat = str(info.get("category") or "").strip()
+    catl = cat.lower()
+    if "semiconductor" in catl:
+        return "Tech (semis)"
+    if "china" in catl:
+        return "Emergents (Chine)"
+    if "emerging" in catl or "emrg" in catl:
+        return "Emergents"
+    if "technology" in catl:
+        return "Tech"
+    return cat
+
+
 def _search_yfinance(query: str, max_results: int) -> list[dict]:
     if yf is None:
         return []

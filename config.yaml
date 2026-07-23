@@ -104,11 +104,7 @@ watchlist:
   - ticker: "AVGO"
     nom: "Broadcom Inc."
     type: "action"
-    theme: ""
-  - ticker: "ASML.AS"
-    nom: "ASML HOLDING"
-    type: "action"
-    theme: ""
+    theme: "Tech (semis)"
 
 # ============================================================================
 # REGLE 1 - Flag de chute brutale (signal d'attention)

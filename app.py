@@ -26,7 +26,7 @@ import streamlit as st
 from sam_invest import db, llm, signals
 from sam_invest.briefing import construire_briefing, indicateurs_ligne
 from sam_invest.export import construire_export_md
-from sam_invest.data_sources import search_instruments
+from sam_invest.data_sources import search_instruments, suggest_theme
 from sam_invest.diagnostic import construire_diagnostic
 from sam_invest import glossaire
 from sam_invest.events import construire_evenements
@@ -1161,23 +1161,25 @@ with tab_idees:
                     for i in config.watchlist]
             existants = {i.ticker.upper() for i in config.watchlist}
             ajoutes, doublons = [], []
-            for lab in choix_ajout:
-                c = labels[lab]
-                if c.ticker.upper() in existants:
-                    continue
-                jumeau = doublon_pour(c.ticker, c.nom, config.watchlist)
-                if jumeau:
-                    doublons.append((c.ticker, jumeau))
-                rows.append({"ticker": c.ticker, "nom": c.nom, "type": c.type, "theme": ""})
-                existants.add(c.ticker.upper())
-                ajoutes.append(c.ticker)
+            with st.spinner("Ajout + detection du theme (secteur / pays)..."):
+                for lab in choix_ajout:
+                    c = labels[lab]
+                    if c.ticker.upper() in existants:
+                        continue
+                    jumeau = doublon_pour(c.ticker, c.nom, config.watchlist)
+                    if jumeau:
+                        doublons.append((c.ticker, jumeau))
+                    rows.append({"ticker": c.ticker, "nom": c.nom, "type": c.type,
+                                 "theme": suggest_theme(c.ticker, c.type)})
+                    existants.add(c.ticker.upper())
+                    ajoutes.append(c.ticker)
             save_watchlist(rows)
             st.session_state["idees_candidats"] = None
             st.session_state["idees_doublons_flash"] = doublons
             st.success(
                 f"{len(ajoutes)} instrument(s) ajoute(s) : {', '.join(ajoutes)}. "
-                "Pense a renseigner le theme dans l'onglet Watchlist. Les donnees se "
-                "rempliront automatiquement a la premiere visite de l'onglet Donnees."
+                "Theme detecte automatiquement (ajustable dans l'onglet Watchlist). "
+                "Les donnees se rempliront a la premiere visite de l'onglet Donnees."
             )
             st.rerun()
 
@@ -1209,8 +1211,10 @@ with tab_idees:
 # ONGLET WATCHLIST : edition simple (ajouter / retirer / modifier des lignes)
 # --------------------------------------------------------------------------
 with tab_edit:
-    st.markdown("**Edition de la watchlist** — modifie les cellules, ajoute une ligne "
-                "(derniere ligne `+`) ou supprime (case a gauche + corbeille), puis enregistre.")
+    st.markdown("**Gerer la watchlist** — cherche un instrument pour l'**ajouter**, "
+                "puis dans la liste plus bas modifie le **theme** directement et clique "
+                "🗑️ pour **retirer** une ligne. Rien n'est definitif tant que tu n'as "
+                "pas enregistre les modifications de theme.")
     try:
         mtime = CONFIG_PATH.stat().st_mtime if CONFIG_PATH.exists() else None
     except OSError:
@@ -1255,24 +1259,54 @@ with tab_edit:
             rows = [{"ticker": i.ticker, "nom": i.nom, "type": i.type, "theme": i.theme}
                     for i in config.watchlist]
             ajout, doublons = 0, []
-            for lab in choix:
-                r = labels[lab]
-                if r["symbol"].upper() in existants:
-                    continue
-                jumeau = doublon_pour(r["symbol"], r["nom"], config.watchlist)
-                if jumeau:
-                    doublons.append((r["symbol"], jumeau))
-                rows.append({"ticker": r["symbol"], "nom": r["nom"], "type": r["type"], "theme": ""})
-                existants.add(r["symbol"].upper())
-                ajout += 1
+            with st.spinner("Ajout + detection du theme (secteur / pays)..."):
+                for lab in choix:
+                    r = labels[lab]
+                    if r["symbol"].upper() in existants:
+                        continue
+                    jumeau = doublon_pour(r["symbol"], r["nom"], config.watchlist)
+                    if jumeau:
+                        doublons.append((r["symbol"], jumeau))
+                    rows.append({"ticker": r["symbol"], "nom": r["nom"], "type": r["type"],
+                                 "theme": suggest_theme(r["symbol"], r["type"])})
+                    existants.add(r["symbol"].upper())
+                    ajout += 1
             save_watchlist(rows)
             st.session_state["search_results"] = None
             st.session_state["wl_doublons_flash"] = doublons
-            st.success(f"{ajout} instrument(s) ajoute(s). Pense a renseigner le theme ci-dessous.")
+            st.session_state["wl_flash_ok"] = (
+                f"{ajout} instrument(s) ajoute(s), theme detecte automatiquement "
+                "(ajuste-le ci-dessous si besoin).")
             st.rerun()
     elif results == []:
         st.caption("Aucun resultat (action/ETF). Pour un ETF, cherche le nom du fonds ou "
                    "son ticker (ex : « invesco qqq », « QQQ ») — les indices sont exclus.")
+
+    with st.expander("➕ Ajouter manuellement un ticker (si la recherche ne trouve pas)"):
+        with st.form("wl_ajout_manuel", clear_on_submit=True):
+            mc1, mc2, mc3, mc4 = st.columns([2, 3, 2, 3])
+            m_ticker = mc1.text_input("Ticker *", placeholder="NVDA, ASML.AS, CW8.PA")
+            m_nom = mc2.text_input("Nom", placeholder="Nvidia")
+            m_type = mc3.selectbox("Type", ["action", "ETF"])
+            m_theme = mc4.text_input("Theme", placeholder="Tech, Emergents...")
+            if st.form_submit_button("Ajouter", use_container_width=True):
+                tk = m_ticker.strip()
+                if not tk:
+                    st.warning("Le ticker est obligatoire.")
+                elif tk.upper() in {i.ticker.upper() for i in config.watchlist}:
+                    st.warning(f"{tk} est deja dans la watchlist.")
+                else:
+                    rows = [{"ticker": i.ticker, "nom": i.nom, "type": i.type, "theme": i.theme}
+                            for i in config.watchlist]
+                    theme = m_theme.strip()
+                    if not theme:
+                        with st.spinner("Detection du theme (secteur / pays)..."):
+                            theme = suggest_theme(tk, m_type)
+                    rows.append({"ticker": tk, "nom": m_nom.strip() or tk,
+                                 "type": m_type, "theme": theme})
+                    save_watchlist(rows)
+                    st.session_state["wl_flash_ok"] = f"{tk} ajoute a la watchlist."
+                    st.rerun()
 
     st.divider()
 
@@ -1284,59 +1318,72 @@ with tab_edit:
                    + " · ".join(f"**{a}** ↔ **{b}**" for a, b in _paires)
                    + ". Supprime l'une des lignes ci-dessous si c'est bien un doublon.")
 
-    st.markdown("##### Watchlist actuelle (edition directe)")
+    # Flash de confirmation apres ajout/suppression (survit au st.rerun).
+    _flash = st.session_state.pop("wl_flash_ok", None)
+    if _flash:
+        st.success(f"✅ {_flash}")
 
-    df_wl = pd.DataFrame(
-        [{"Ticker": i.ticker, "Nom": i.nom, "Type": i.type, "Theme": i.theme}
-         for i in config.watchlist]
-    )
-    if df_wl.empty:
-        df_wl = pd.DataFrame([{"Ticker": "", "Nom": "", "Type": "action", "Theme": ""}])
+    st.markdown(f"##### 📋 Watchlist actuelle — {len(config.watchlist)} instrument(s)")
 
-    edited = st.data_editor(
-        df_wl,
-        num_rows="dynamic",
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Ticker": st.column_config.TextColumn("Ticker", help="Symbole yfinance (ex: NVDA, ASML, CW8.PA)", required=True),
-            "Nom": st.column_config.TextColumn("Nom"),
-            "Type": st.column_config.SelectboxColumn("Type", options=["action", "ETF"], required=True),
-            "Theme": st.column_config.TextColumn("Theme", help="Etiquette libre (ex: Tech, Emergents)"),
-        },
-        key="editeur_watchlist",
-    )
+    if not config.watchlist:
+        st.info("Watchlist vide. Utilise la recherche ci-dessus ou « Ajouter "
+                "manuellement » pour ajouter ton premier instrument.")
+    else:
+        st.caption("Modifie le **theme** de chaque ligne puis clique 💾 en bas. "
+                   "Le bouton 🗑️ retire immediatement la ligne.")
 
-    col_save, col_info = st.columns([1, 3])
-    with col_save:
-        btn_save = st.button("💾 Enregistrer", use_container_width=True)
-    with col_info:
-        st.caption("L'enregistrement reecrit uniquement la liste dans config.yaml ; "
-                   "les seuils et regles sont preserves.")
+        def _wl_rows(skip: str | None = None) -> list[dict]:
+            """Reconstruit la liste depuis les champs edites (session_state)."""
+            out = []
+            for it in config.watchlist:
+                if skip is not None and it.ticker == skip:
+                    continue
+                out.append({
+                    "ticker": it.ticker,
+                    "nom": st.session_state.get(f"wl_nom_{it.ticker}", it.nom),
+                    "type": st.session_state.get(f"wl_type_{it.ticker}", it.type),
+                    "theme": st.session_state.get(f"wl_theme_{it.ticker}", it.theme),
+                })
+            return out
 
-    if btn_save:
-        rows = edited.to_dict(orient="records")
-        # Validation simple : ticker non vide + pas de doublon.
-        vus, propres, ignores = set(), [], 0
-        for r in rows:
-            t = str(r.get("Ticker", "") or "").strip()
-            if not t:
-                ignores += 1
-                continue
-            if t.upper() in vus:
-                ignores += 1
-                continue
-            vus.add(t.upper())
-            propres.append({"ticker": t, "nom": r.get("Nom", ""),
-                            "type": r.get("Type", "action"), "theme": r.get("Theme", "")})
-        if not propres:
-            st.error("Aucun instrument valide a enregistrer (ticker manquant ?).")
-        else:
-            n = save_watchlist(propres)
-            msg = f"Watchlist enregistree : {n} instrument(s)."
-            if ignores:
-                msg += f" {ignores} ligne(s) ignoree(s) (ticker vide ou doublon)."
-            st.success(msg)
+        # En-tetes de colonnes (alignes sur les lignes ci-dessous).
+        h = st.columns([2, 4, 2, 3, 1])
+        h[0].caption("**Ticker**")
+        h[1].caption("**Nom**")
+        h[2].caption("**Type**")
+        h[3].caption("**Theme**")
+        h[4].caption("**Retirer**")
+
+        for it in config.watchlist:
+            c = st.columns([2, 4, 2, 3, 1])
+            c[0].text_input("Ticker", value=it.ticker, key=f"wl_tk_{it.ticker}",
+                            disabled=True, label_visibility="collapsed")
+            c[1].text_input("Nom", value=it.nom, key=f"wl_nom_{it.ticker}",
+                            label_visibility="collapsed")
+            c[2].selectbox("Type", ["action", "ETF"],
+                           index=1 if str(it.type).lower() in ("etf", "fund", "fonds") else 0,
+                           key=f"wl_type_{it.ticker}", label_visibility="collapsed")
+            c[3].text_input("Theme", value=it.theme, key=f"wl_theme_{it.ticker}",
+                            placeholder="ex : Tech", label_visibility="collapsed")
+            if c[4].button("🗑️", key=f"wl_del_{it.ticker}",
+                           help=f"Retirer {it.ticker} de la watchlist"):
+                save_watchlist(_wl_rows(skip=it.ticker))
+                st.session_state["wl_flash_ok"] = f"{it.ticker} retire de la watchlist."
+                st.rerun()
+
+        st.write("")
+        col_save, col_info = st.columns([1, 3])
+        with col_save:
+            btn_save = st.button("💾 Enregistrer les modifications",
+                                 use_container_width=True, type="primary")
+        with col_info:
+            st.caption("Enregistre les changements de nom / type / theme. "
+                       "Seule la liste est reecrite dans config.yaml ; les seuils "
+                       "et regles sont preserves.")
+
+        if btn_save:
+            n = save_watchlist(_wl_rows())
+            st.session_state["wl_flash_ok"] = f"Watchlist enregistree : {n} instrument(s)."
             st.rerun()  # recharge config.yaml pour rafraichir toute l'app
 
 # ==========================================================================
