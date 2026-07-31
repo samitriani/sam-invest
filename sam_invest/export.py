@@ -2,16 +2,16 @@
 
 Assemble en un seul fichier .md, pensé pour etre recolle a Claude ensuite :
   - metadonnees (date d'export, devise, horodatage des dernieres MAJ) ;
-  - une legende des codes maison (fruit, flags, RSI, 🚬) que Claude ne devine pas ;
-  - onglet Donnees : tableau signaux (actions/ETF) + calendrier & estimations ;
-  - onglet News : news brutes + classement Haiku (categorie/tonalite/traduction) ;
-  - onglet Briefing : synthese globale + briefing 3 parties + reco par instrument ;
-  - onglet Diagnostic : dernier diagnostic de la session (si realise) ;
-  - onglet Idees : candidats d'ajout a la watchlist generes durant la session
-    (si l'utilisateur a clique sur « Generer des idees »).
+  - une legende des codes maison (flags, RSI, 🚬) que Claude ne devine pas ;
+  - page Donnees : tableau signaux (actions/ETF) + calendrier & estimations ;
+  - page News : news brutes + classement Haiku (categorie/tonalite/traduction) ;
+  - page Briefing : synthese globale + briefing 3 parties + reco par instrument ;
+  - page VN Diagnostic : diagnostic le plus recent (si realise) ;
+  - section Suggestions (page Watchlist) : candidats d'ajout generes durant la
+    session (si l'utilisateur a clique sur « Generer des suggestions »).
 
 Tout est DETERMINISTE cote chiffres (lu en base, ou calcule en direct pour les
-candidats Idees) ; les textes de synthese proviennent de Claude et sont repris
+candidats suggeres) ; les textes de synthese proviennent de Claude et sont repris
 tels quels. Aucun appel LLM ici.
 """
 
@@ -23,10 +23,6 @@ from datetime import datetime
 from . import db
 from .briefing import construire_briefing
 from .config import AppConfig
-
-FRUIT = {"concombre": ("🥒", "Acheter"), "orange": ("🍊", "Maintenir"),
-         "tomate": ("🍅", "Vendre")}
-
 
 # --------------------------------------------------------------------------
 # Formatage
@@ -108,8 +104,9 @@ def _entete(config: AppConfig) -> list[str]:
         + (f" — {mn['detail']}" if mn and mn.get('detail') else ""),
         "",
         "## Legende",
-        "- **Recommandation (fruit)** : 🥒 concombre = acheter · 🍊 orange = maintenir · "
-        "🍅 tomate = vendre.",
+        "- **Recommandation** : ACHAT / GARDER / VENDRE — heuristique de lecture "
+        "generee par Claude a partir des chiffres et des news, **pas un conseil "
+        "financier**.",
         "- **Flags** : 🔴 alerte · 🟡 info (regles deterministes : chute, technique, "
         "degradation, evenements, revisions).",
         "- **Signaux** : tendance = SMA50 vs SMA200 ; position 52s % (0 = plus-bas 52 "
@@ -128,7 +125,7 @@ def _entete(config: AppConfig) -> list[str]:
 
 
 def _section_signaux(instruments: list[dict]) -> list[str]:
-    out = ["## 1. Vue d'ensemble — signaux (onglet Donnees)", ""]
+    out = ["## 1. Vue d'ensemble — signaux (page Donnees)", ""]
     cols = ("Ticker", "Nom", "Theme", "Cours", "Seance %", "Drawdown 52s %",
             "Position 52s %", "RSI 14", "Etat RSI", "Tendance")
     for label, key in (("Actions", "action"), ("ETF", "etf")):
@@ -180,9 +177,9 @@ def _section_briefing_global(synth_global: str | None, synth_instruments: dict) 
     out.append("")
     if synth_instruments:
         from collections import Counter
-        cnt = Counter((v or {}).get("fruit", "") for v in synth_instruments.values())
-        out.append(f"**Recommandations :** 🥒 {cnt.get('concombre', 0)} acheter · "
-                   f"🍊 {cnt.get('orange', 0)} maintenir · 🍅 {cnt.get('tomate', 0)} vendre.")
+        cnt = Counter((v or {}).get("reco", "") for v in synth_instruments.values())
+        out.append(f"**Recommandations :** achat {cnt.get('achat', 0)} · "
+                   f"garder {cnt.get('garder', 0)} · vendre {cnt.get('vendre', 0)}.")
         out.append("")
     return out
 
@@ -366,19 +363,18 @@ def _section_par_instrument(config: AppConfig, data: dict, synth_instruments: di
         else:
             out.append("**Flags** : aucun.")
         out.append("")
-        # Briefing Claude (3 parties + reco)
+        # Briefing Claude (3 parties)
         entry = synth_instruments.get(t) or {}
         if entry:
-            f_emoji, f_label = FRUIT.get(entry.get("fruit", ""), ("", ""))
             out.append("**Briefing (Claude)** :")
+            if entry.get("reco"):
+                out.append(f"- **Recommandation : {entry['reco'].upper()}**")
             if entry.get("analyse_chiffres"):
                 out.append(f"- 📊 Analyse des chiffres : {entry['analyse_chiffres']}")
             if entry.get("analyse_news"):
                 out.append(f"- 📰 Analyse des news : {entry['analyse_news']}")
             if entry.get("conclusion"):
                 out.append(f"- 🎯 Conclusion & arguments : {entry['conclusion']}")
-            if f_emoji:
-                out.append(f"- Recommandation : {f_emoji} {f_label}")
         else:
             out.append("**Briefing (Claude)** : non genere dans la session.")
         out.append("")
@@ -396,7 +392,7 @@ def _section_diagnostic(diag_result: dict | None) -> list[str]:
     diag = diag_result["diag"]
     conclusions = diag_result.get("conclusions", {})
     resume = diag_result.get("resume", "")
-    out = ["## 5. Diagnostic financier (dernier de la session)", ""]
+    out = ["## 5. VN Diagnostic financier (le plus recent)", ""]
     entete = f"### {diag.get('nom')} ({diag.get('ticker')})"
     if diag.get("devise"):
         entete += f" · {diag['devise']}"
@@ -407,6 +403,9 @@ def _section_diagnostic(diag_result: dict | None) -> list[str]:
     if diag.get("note_fiabilite"):
         out.append(f"> ⚠️ {diag['note_fiabilite']}")
     out.append("")
+    if diag_result.get("reco"):
+        out.append(f"**Recommandation : {diag_result['reco'].upper()}**")
+        out.append("")
     if resume:
         out.append("**Executive summary (Claude Opus) :**")
         out.append("")
@@ -431,7 +430,7 @@ def _section_diagnostic(diag_result: dict | None) -> list[str]:
 def _section_idees(candidats: list | None) -> list[str]:
     if not candidats:
         return []
-    out = ["## 6. Idees d'ajout a la watchlist (session)", ""]
+    out = ["## 6. Suggestions d'ajout a la watchlist (session)", ""]
     for c in candidats:
         out.append(f"### {c.ticker} — {c.nom} ({c.type} · {c.bourse or 'n/d'})")
         out.append(f"_Origine_ : {c.origine}. {c.raison}")

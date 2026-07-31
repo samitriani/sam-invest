@@ -1,6 +1,10 @@
 # Sam_Invest - dependances
 # Couche donnees (deterministe, sans LLM)
-streamlit>=1.40
+# Plancher releve : l'UI utilise st.navigation/st.Page (menu burger), st.badge
+# (recos ACHAT/GARDER/VENDRE), st.container(horizontal=...) (metriques qui
+# s'enroulent sur mobile) et le parametre width= des widgets. Avec >=1.40, une
+# install neuve pouvait resoudre une version trop ancienne et planter au demarrage.
+streamlit>=1.50
 pandas>=2.2
 numpy>=2.1
 yfinance>=0.2.50

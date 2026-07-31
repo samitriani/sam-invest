@@ -8,10 +8,11 @@ Role strictement limite :
 Garde-fous (rappeles dans les prompts) :
   - Claude ne calcule ni n'invente AUCUN chiffre (prix, ratio, %, valeur).
     Il ne fait que reformuler les chiffres qu'on lui donne.
-  - Les recommandations (briefing et exec summary du diagnostic) utilisent le
-    code "fruit" (concombre=acheter, orange=maintenir, tomate=vendre) et sont
-    toujours accompagnees d'un rappel : ceci n'est pas un conseil en
-    investissement.
+  - Le briefing et l'exec summary du diagnostic se terminent par une
+    RECOMMANDATION en toutes lettres : 'achat' | 'garder' | 'vendre'. Elle est
+    toujours argumentee et accompagnee du rappel que ceci n'est pas un conseil
+    en investissement. (L'ancien codage par fruits - concombre/orange/tomate -
+    a ete abandonne : une icone ne s'auto-explique pas.)
 
 Si la cle ANTHROPIC_API_KEY est absente ou l'appel echoue, les fonctions
 renvoient une valeur de repli (None / texte d'indisponibilite) sans planter.
@@ -111,16 +112,15 @@ SYNTHESE_SYSTEM = (
     "variations, signaux techniques, flags de regles, evenements, revisions d'estimations, "
     "news resumees). "
     "Pour CHAQUE instrument tu produis un BRIEFING STRUCTURE EN 3 PARTIES plus une "
-    "RECOMMANDATION codee par un fruit ('concombre'=ACHETER, 'orange'=MAINTENIR, "
-    "'tomate'=VENDRE) : "
-    "(A) 'analyse_chiffres' : ce que disent les chiffres de l'onglet Donnees (cours, "
+    "RECOMMANDATION en toutes lettres ('achat', 'garder' ou 'vendre') : "
+    "(A) 'analyse_chiffres' : ce que disent les chiffres de la page Donnees (cours, "
     "variations, tendance SMA, RSI, drawdown, fondamentaux, evenements, revisions "
     "d'estimations, et l'avis des analystes du champ 'avis_analystes' : consensus "
     "achat/conserver/vendre et derniers changements d'avis par les banques) ; "
     "(B) 'analyse_news' : ce que racontent les news recentes de l'instrument (news_resumees) "
     "et ce qu'elles impliquent ; s'il n'y a pas de news, dis-le en une phrase ; "
     "(C) 'conclusion' : ta conclusion et tes arguments, qui font la SYNTHESE des deux "
-    "analyses ci-dessus et JUSTIFIENT explicitement le fruit choisi. "
+    "analyses ci-dessus et JUSTIFIENT explicitement la recommandation choisie. "
     "REGLES STRICTES : "
     "(1) Tu n'inventes, ne calcules ni ne modifies AUCUN chiffre. "
     "(2) Tu NE RECITES PAS les chiffres bruts (deja affiches a l'ecran) : tu EXPLIQUES "
@@ -133,8 +133,10 @@ SYNTHESE_SYSTEM = (
     "(3) Dis ce que la situation IMPLIQUE et CE QU'IL FAUT SURVEILLER. Signale simplement les "
     "contradictions de signaux (ex: tendance de fond positive mais forte dette, ou chiffres "
     "solides mais news inquietantes). "
-    "(4) La RECOMMANDATION (fruit) doit decouler des chiffres ET des news, et rester coherente "
-    "avec la conclusion. "
+    "(4) La RECOMMANDATION doit decouler des chiffres ET des news, et rester coherente "
+    "avec la conclusion. Elle vaut exactement 'achat', 'garder' ou 'vendre' (rien "
+    "d'autre, en minuscules). C'est une heuristique de lecture, pas un ordre : la "
+    "decision appartient au lecteur. "
     "Style : francais simple, phrases courtes, ton chaleureux et concret."
 )
 
@@ -142,7 +144,7 @@ SYNTHESE_SYSTEM = (
 def synthese_et_reco(secrets: Secrets, donnees_briefing: dict, progress=None) -> dict | None:
     """UN seul appel Sonnet EN STREAMING : vue d'ensemble + 3 parties par instrument.
 
-    Renvoie {"global": str, "instruments": {ticker: {fruit, analyse_chiffres,
+    Renvoie {"global": str, "instruments": {ticker: {reco, analyse_chiffres,
     analyse_news, conclusion}}} ou None si indisponible.
 
     Le streaming borne l'appel (timeout explicite), permet une recuperation partielle
@@ -164,16 +166,16 @@ def synthese_et_reco(secrets: Secrets, donnees_briefing: dict, progress=None) ->
         "exactement deux cles :\n"
         "- \"global\" : 3 a 4 phrases de vue d'ensemble en langage simple (ambiance generale + "
         "1-2 points d'attention).\n"
-        "- \"instruments\" : un objet {\"<ticker>\": {\"fruit\": \"concombre|orange|tomate\", "
+        "- \"instruments\" : un objet {\"<ticker>\": {\"reco\": \"achat|garder|vendre\", "
         "\"analyse_chiffres\": \"<...>\", \"analyse_news\": \"<...>\", \"conclusion\": "
         "\"<...>\"}} couvrant CHAQUE ticker du champ 'instruments', avec les cles dans cet "
-        "ordre EXACT (fruit, puis analyse_chiffres, puis analyse_news, puis conclusion). "
+        "ordre EXACT (reco, puis analyse_chiffres, puis analyse_news, puis conclusion). "
         "'analyse_chiffres' = 2 a 3 phrases interpretant les chiffres de l'instrument (cours, "
         "tendance, RSI, drawdown, fondamentaux, evenements/revisions). 'analyse_news' = 2 a 3 "
         "phrases sur les news recentes (news_resumees) et leur portee ; s'il n'y en a pas, une "
-        "seule phrase le disant. 'conclusion' = 2 a 3 phrases de synthese qui justifient le "
-        "fruit. N'ecris pas les chiffres bruts, EXPLIQUE-les. Reste concis pour que la reponse "
-        "tienne en entier.\n"
+        "seule phrase le disant. 'conclusion' = 2 a 3 phrases de synthese qui justifient la "
+        "reco. N'ecris pas les chiffres bruts, EXPLIQUE-les. Reste concis "
+        "pour que la reponse tienne en entier.\n"
         "Ne renvoie que le JSON, sans texte autour.\n\n"
         f"{json.dumps(donnees_briefing, ensure_ascii=False, default=str)}"
     )
@@ -242,19 +244,40 @@ def synthese_et_reco(secrets: Secrets, donnees_briefing: dict, progress=None) ->
     return None
 
 
+RECOS_VALIDES = ("achat", "garder", "vendre")
+
+
+def normaliser_reco(valeur) -> str:
+    """Ramene une reco du LLM a 'achat' | 'garder' | 'vendre', ou '' si illisible.
+
+    Tolere les variantes courantes ('acheter', 'conserver', 'maintenir'...) : un
+    libelle inattendu ne doit jamais faire disparaitre le briefing, il fait juste
+    disparaitre le badge.
+    """
+    v = str(valeur or "").strip().lower()
+    if v in RECOS_VALIDES:
+        return v
+    for cle, variantes in (("achat", ("acheter", "buy", "renforcer")),
+                           ("garder", ("conserver", "maintenir", "hold", "neutre")),
+                           ("vendre", ("sell", "alleger", "reduire"))):
+        if v in variantes:
+            return cle
+    return ""
+
+
 def _normaliser_instruments(raw: dict) -> dict:
-    """Garantit que chaque entree est {fruit, analyse_chiffres, analyse_news, conclusion}."""
+    """Garantit que chaque entree est {reco, analyse_chiffres, analyse_news, conclusion}."""
     out = {}
     for t, v in raw.items():
         if isinstance(v, dict):
             out[t] = {
-                "fruit": str(v.get("fruit", "") or "").lower(),
+                "reco": normaliser_reco(v.get("reco")),
                 "analyse_chiffres": v.get("analyse_chiffres", "") or "",
                 "analyse_news": v.get("analyse_news", "") or "",
                 "conclusion": v.get("conclusion", "") or "",
             }
         else:  # tolerance si le modele renvoie juste un texte
-            out[t] = {"fruit": "", "analyse_chiffres": "", "analyse_news": "",
+            out[t] = {"reco": "", "analyse_chiffres": "", "analyse_news": "",
                       "conclusion": str(v)}
     return out
 
@@ -262,7 +285,7 @@ def _normaliser_instruments(raw: dict) -> dict:
 def _salvage_combine(text: str) -> dict:
     """Recupere autant que possible d'un JSON {global, instruments:{t:{...}}} tronque.
 
-    Extrait 'global' et tous les blocs "TICKER": {fruit, analyse_chiffres, analyse_news,
+    Extrait 'global' et tous les blocs "TICKER": {reco, analyse_chiffres, analyse_news,
     conclusion} COMPLETS (l'entree coupee en fin de reponse est ignoree).
     """
     out: dict = {"global": "", "instruments": {}}
@@ -280,9 +303,11 @@ def _salvage_combine(text: str) -> dict:
         except Exception:
             return s
 
+    # "reco" est optionnel dans la regex : si le modele l'omet, le bloc reste
+    # recuperable (on perd le badge, pas le briefing).
     bloc = re.compile(
         r'"([A-Za-z0-9.\^\-]{1,15})"\s*:\s*\{\s*'
-        r'"fruit"\s*:\s*"((?:[^"\\]|\\.)*)"\s*,\s*'
+        r'(?:"reco"\s*:\s*"((?:[^"\\]|\\.)*)"\s*,\s*)?'
         r'"analyse_chiffres"\s*:\s*"((?:[^"\\]|\\.)*)"\s*,\s*'
         r'"analyse_news"\s*:\s*"((?:[^"\\]|\\.)*)"\s*,\s*'
         r'"conclusion"\s*:\s*"((?:[^"\\]|\\.)*)"\s*\}',
@@ -293,7 +318,7 @@ def _salvage_combine(text: str) -> dict:
         if key in ("global", "instruments"):
             continue
         out["instruments"][key] = {
-            "fruit": m.group(2).lower(),
+            "reco": normaliser_reco(m.group(2)),
             "analyse_chiffres": _unescape(m.group(3)),
             "analyse_news": _unescape(m.group(4)),
             "conclusion": _unescape(m.group(5)),
@@ -388,13 +413,14 @@ DIAG_SUMMARY_SYSTEM = (
     "(deja calcules) et les conclusions par etape. Redige un EXECUTIVE SUMMARY en francais "
     "clair (4 a 6 phrases) : sante globale, 2-3 points forts, 2-3 points de vigilance, et ce "
     "qui merite le plus d'attention. "
-    "Ensuite, sur une ligne a part, donne ta PRECONISATION codee par un fruit (meme code que "
-    "le briefing) : 🥒 concombre = ACHETER, 🍊 orange = MAINTENIR, 🍅 tomate = VENDRE. "
-    "Format exact : « **Preconisation : <emoji> <fruit> (<Acheter|Maintenir|Vendre>)** » "
-    "suivi de 2-3 phrases qui expliquent ta position en t'appuyant uniquement sur les "
-    "chiffres et conclusions fournis (creation de valeur ROIC vs WACC, marges, endettement, "
-    "generation de cash, valorisation) ; si les signaux sont contradictoires, dis-le et "
-    "explique ce qui ferait pencher la balance d'un cote ou de l'autre. "
+    "Ensuite, sous un titre en gras « **Ce que disent les chiffres** », 3 a 4 phrases qui "
+    "posent ta lecture d'ensemble en t'appuyant uniquement sur les chiffres et conclusions "
+    "fournis (creation de valeur ROIC vs WACC, marges, endettement, generation de cash, "
+    "valorisation) ; si les signaux sont contradictoires, dis-le et explique ce qui ferait "
+    "pencher la balance d'un cote ou de l'autre. "
+    "Termine par une DERNIERE LIGNE, seule, au format EXACT « RECO: ACHAT » (ou "
+    "« RECO: GARDER », ou « RECO: VENDRE ») — un seul de ces trois mots, en majuscules, "
+    "rien d'autre sur cette ligne. C'est une heuristique de lecture, pas un ordre. "
     "REGLES : aucun chiffre invente (cite ceux fournis) ; "
     "si tu cites un chiffre incertain ou marque 🚬, prefixe-le de 🚬 ; "
     "termine par un rappel d'une ligne : ceci n'est pas un conseil en investissement, "
@@ -428,6 +454,24 @@ def conclusion_etape_stream(secrets: Secrets, titre: str, lignes: list):
                 yield chunk
     except Exception as e:
         yield f"(Conclusion indisponible : {e})"
+
+
+def extraire_reco_resume(texte: str) -> tuple[str, str]:
+    """Detache la ligne « RECO: ACHAT » de l'executive summary du diagnostic.
+
+    Renvoie (reco normalisee, texte sans cette ligne). Le marqueur est demande en
+    DERNIERE ligne : pendant le streaming l'utilisateur lit d'abord l'analyse, et
+    l'UI re-rend ensuite le bloc avec le badge en tete. Si le modele ne le met pas
+    (ou le formate autrement), on renvoie ('', texte) et l'app affiche le resume
+    tel quel, sans badge.
+    """
+    if not texte:
+        return "", texte or ""
+    m = re.search(r'^\s*\**\s*RECO\s*:\s*\**\s*([A-Za-zÀ-ÿ]+)\s*\**\s*$',
+                  texte, re.IGNORECASE | re.MULTILINE)
+    if not m:
+        return "", texte
+    return normaliser_reco(m.group(1)), (texte[:m.start()] + texte[m.end():]).strip()
 
 
 def exec_summary_diagnostic_stream(secrets: Secrets, diag: dict, conclusions: dict):

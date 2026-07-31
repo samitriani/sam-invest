@@ -120,7 +120,7 @@ CREATE TABLE IF NOT EXISTS briefing_cache (
     news_asof     TEXT,                  -- last_update('news').asof au moment de la generation
     synthese_asof TEXT,                  -- horodatage affiche a l'utilisateur ("base sur les donnees du...")
     global        TEXT,                  -- synthese globale (texte)
-    instruments   TEXT                   -- JSON {ticker: {fruit, analyse_chiffres, analyse_news, conclusion}}
+    instruments   TEXT                   -- JSON {ticker: {analyse_chiffres, analyse_news, conclusion}}
 );
 
 CREATE TABLE IF NOT EXISTS flags_seen (
@@ -128,6 +128,17 @@ CREATE TABLE IF NOT EXISTS flags_seen (
     ticker        TEXT NOT NULL,
     premiere_vue  TEXT NOT NULL,         -- ISO : 1re apparition de ce flag
     derniere_vue  TEXT NOT NULL          -- ISO : maj des donnees la plus recente ou il etait present
+);
+
+CREATE TABLE IF NOT EXISTS diagnostic_cache (
+    ticker        TEXT PRIMARY KEY,      -- un diagnostic conserve par entreprise
+    nom           TEXT,
+    generated_at  TEXT NOT NULL,         -- horodatage ISO du debut de generation
+    statut        TEXT NOT NULL,         -- 'partiel' (en cours) | 'complet'
+    diag          TEXT NOT NULL,         -- JSON : chiffres deterministes (construire_diagnostic)
+    conclusions   TEXT,                  -- JSON : {etape_id: texte Opus}
+    resume        TEXT,                  -- executive summary (texte Opus, marqueur RECO retire)
+    reco          TEXT                   -- 'achat' | 'garder' | 'vendre' | '' (extraite du resume)
 );
 """
 
@@ -147,6 +158,13 @@ def init_db() -> None:
         if cols and "kind" not in cols:
             conn.execute("DROP TABLE update_log")
         conn.executescript(SCHEMA)
+        # Migration : colonne 'reco' ajoutee apres coup a diagnostic_cache.
+        # CREATE TABLE IF NOT EXISTS ne touche pas une table deja creee, il faut
+        # donc l'ajouter explicitement (les diagnostics existants gardent reco NULL,
+        # ce qui affiche simplement le resume sans badge).
+        dcols = [r[1] for r in conn.execute("PRAGMA table_info(diagnostic_cache)").fetchall()]
+        if dcols and "reco" not in dcols:
+            conn.execute("ALTER TABLE diagnostic_cache ADD COLUMN reco TEXT")
 
 
 # --------------------------------------------------------------------------
@@ -306,6 +324,56 @@ def get_briefing_cache() -> dict | None:
     with get_conn() as conn:
         row = conn.execute("SELECT * FROM briefing_cache WHERE id = 1").fetchone()
         return dict(row) if row else None
+
+
+# --- Diagnostics (persistes en base, pas en session) -----------------------
+# Usage mobile : la connexion peut tomber en pleine generation. On ecrit apres
+# CHAQUE etape (statut 'partiel') pour qu'une coupure ne perde jamais le travail
+# deja paye a Opus ; le statut passe a 'complet' quand l'executive summary est la.
+def save_diagnostic(ticker: str, nom: str | None, generated_at: str, statut: str,
+                    diag_json: str, conclusions_json: str, resume: str,
+                    reco: str = "") -> None:
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO diagnostic_cache
+               (ticker, nom, generated_at, statut, diag, conclusions, resume, reco)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(ticker) DO UPDATE SET
+                 nom=excluded.nom, generated_at=excluded.generated_at,
+                 statut=excluded.statut, diag=excluded.diag,
+                 conclusions=excluded.conclusions, resume=excluded.resume,
+                 reco=excluded.reco""",
+            (ticker, nom, generated_at, statut, diag_json, conclusions_json, resume, reco),
+        )
+
+
+def get_diagnostic(ticker: str) -> dict | None:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM diagnostic_cache WHERE ticker = ?",
+                           (ticker,)).fetchone()
+        return dict(row) if row else None
+
+
+def dernier_diagnostic() -> dict | None:
+    """Le diagnostic genere le plus recemment (toutes entreprises confondues)."""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM diagnostic_cache ORDER BY generated_at DESC LIMIT 1").fetchone()
+        return dict(row) if row else None
+
+
+def list_diagnostics(limit: int = 20) -> list[dict]:
+    """Index leger (sans les textes) des diagnostics conserves, plus recent d'abord."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT ticker, nom, generated_at, statut FROM diagnostic_cache "
+            "ORDER BY generated_at DESC LIMIT ?", (limit,)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def supprimer_diagnostic(ticker: str) -> None:
+    with get_conn() as conn:
+        conn.execute("DELETE FROM diagnostic_cache WHERE ticker = ?", (ticker,))
 
 
 def enregistrer_flags(flags: list[dict], asof: str) -> None:
