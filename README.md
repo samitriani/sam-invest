@@ -82,14 +82,16 @@ On coche deux ou trois entreprises, on clique **« Ajouter et commencer »**, et
 menu complet apparait. Montrer une machine a l'arret est le meilleur moyen de
 perdre quelqu'un qui decouvre l'outil.
 
-### 4 pages dans le menu ☰ (+ actions globales dans ce meme menu)
+### 5 pages dans le menu ☰ (+ actions globales dans ce meme menu)
 La navigation est un **menu burger** (icone ☰ en haut a gauche sur telephone ; menu
 lateral deplie sur grand ecran). Une seule page est chargee a la fois — page legere
 sur mobile — et **l'adresse porte la page courante**, donc une coupure de connexion
 suivie d'une reconnexion ramene exactement ou on etait.
 
-Chaque page est nommee par la **question a laquelle elle repond**, et l'ordre du
-menu suit celui dans lequel on s'en sert. Le menu contient aussi
+Chaque page est nommee par la **question a laquelle elle repond**. Les quatre
+premieres parlent des valeurs **que tu suis** ; la cinquieme, **Analyser**,
+s'applique a **n'importe quelle entreprise cotee** — c'est cette difference de
+**portee** qui justifie qu'elle soit a part. Le menu contient aussi
 **« Tout mettre a jour »**, **« Exporter (.md) »** et la fraicheur des donnees.
 
 - **📈 Aujourd'hui** — *« Quoi de neuf ? »* C'est l'accueil, parce que c'est la
@@ -105,22 +107,25 @@ menu suit celui dans lequel on s'en sert. Le menu contient aussi
   type, theme, retrait 🗑️) et **💡 Suggestions d'ajout** _(Claude Sonnet, a la
   demande)_ : pairs Finnhub + suggestions thematiques, chaque candidat valide et
   chiffre par le code avant affichage.
-- **🔎 Une entreprise** — *« Je creuse celle-ci. »* La fiche complete d'UNE valeur,
-  sur un seul ecran defilant : *son cours* (graphique + indicateurs), *ses chiffres
-  cles*, *ce qu'en disent les analystes*, *ses actualites*, puis
-  **l'analyse approfondie** a la demande. Cette derniere _(Claude Opus, ~1 min)_
-  calcule marges, ROE/ROA/ROIC, WACC/EVA, structure financiere, cash, croissance et
-  valorisation, puis redige une conclusion par etape et une conclusion generale
-  avec sa **recommandation**. Elle est **conservee en base** et se rouvre
-  gratuitement a la selection de l'entreprise ; l'ecriture se fait **apres chaque
-  etape**, donc une coupure reseau ne perd jamais ce qui a deja ete paye.
-  Le champ de recherche permet aussi d'afficher une entreprise **hors watchlist** —
-  c'est souvent comme ca qu'on decide d'en ajouter une.
+- **🔎 Une entreprise** — *« Je creuse celle-ci. »* Le detail d'UNE valeur **suivie** :
+  *son cours* (graphique + indicateurs), *ses chiffres cles*, *ce qu'en disent les
+  analystes*, *ses actualites*. Tout sort de la base locale — donc uniquement pour
+  les valeurs de ta liste. Un lien en bas renvoie vers **Analyser**.
 - **🧠 Ma synthese** — *« Aide-moi a faire le point. »* Une section **🌍 Global**
-  puis une section **📋 Par instrument**. Chaque volet donne une analyse en
+  puis une section **📋 Valeur par valeur**. Chaque volet donne une analyse en
   **3 parties** — chiffres, actualites, conclusion & arguments — plus une
   **recommandation ACHAT / GARDER / VENDRE** en badge, visible dans le titre sans
   avoir a l'ouvrir. Un seul appel Sonnet couvre le global ET tous les instruments.
+- **🔬 Analyser** — *« Cette boite vaut-elle quelque chose ? »* **Portee differente :
+  toute entreprise cotee, suivie ou non.** Recherche libre (tes valeurs et tes
+  analyses passees sont proposees en raccourci), puis une analyse financiere en
+  **7 etapes** _(Claude Opus, ~1 min)_ : marges, rentabilite, creation de valeur,
+  structure financiere, cash, croissance, valorisation. Une conclusion par etape,
+  une conclusion generale et sa **recommandation**. Rien n'a besoin d'etre en base :
+  les comptes sont recuperes en direct. Les analyses sont **conservees** et se
+  rouvrent gratuitement ; l'ecriture se fait **apres chaque etape**, donc une
+  coupure reseau ne perd jamais ce qui a deja ete paye. Sous l'analyse, un bouton
+  **« ➕ Suivre cette entreprise »** : c'est la que se prend la decision d'ajouter.
 - **ℹ️ Aide** — methodologie code/LLM, role de chaque page, code des recos et
   symboles (🆕, ⚠️), cout et duree de chaque bouton, sources de donnees, glossaire
   filtrable. Les pages de travail ne portent plus de renvoi vers l'aide : une page

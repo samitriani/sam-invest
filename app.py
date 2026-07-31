@@ -626,55 +626,16 @@ def page_donnees():
 
 
 # --------------------------------------------------------------------------
-# PAGE UNE ENTREPRISE : la fiche complete d'UNE valeur
+# PAGE UNE ENTREPRISE : la fiche d'une valeur SUIVIE
 # --------------------------------------------------------------------------
-# Tout ce qu'on sait d'UNE entreprise sur un seul ecran : cours, fondamentaux,
-# ses actualites, l'avis des analystes, puis l'analyse approfondie a la demande.
-# Auparavant ces quatre blocs vivaient sur trois pages differentes et c'etait au
-# lecteur de les recoudre de tete.
+# Portee : la watchlist, et elle seule. Tout ce que cette page affiche (cours,
+# chiffres cles, analystes, actualites) sort de la base locale, qui n'existe que
+# parce que le ticker est suivi et actualise. C'est de la SURVEILLANCE.
+#
+# L'analyse approfondie, elle, s'applique a n'importe quelle societe cotee et ne
+# suppose aucun etat prealable : c'est de l'EXPLORATION. Deux portees, deux
+# activites, donc deux pages (voir page_analyser).
 # --------------------------------------------------------------------------
-def selecteur_entreprise() -> str | None:
-    """Entreprise affichee : la watchlist d'abord, la recherche libre ensuite.
-
-    La recherche reste indispensable : on veut pouvoir analyser une entreprise
-    AVANT de decider de la suivre. Les entreprises trouvees hors watchlist
-    restent selectionnables le temps de la session.
-    """
-    noms = {i.ticker: i.nom for i in config.watchlist}
-    noms.update(st.session_state.get("entreprise_hors") or {})
-
-    choix = None
-    if noms:
-        choix = st.selectbox("Entreprise", list(noms),
-                             format_func=lambda t: f"{t} — {noms[t]}",
-                             key="entreprise_ticker")
-
-    with st.expander("🔎 Chercher une entreprise que je ne suis pas"):
-        with st.form("form_recherche_entreprise", clear_on_submit=False):
-            q = st.text_input("Nom ou ticker", key="entreprise_q",
-                              placeholder="ex : NVDA, Alibaba, ASML...")
-            btn = st.form_submit_button("Rechercher", use_container_width=True)
-        if btn and q.strip():
-            with st.spinner("Recherche..."):
-                st.session_state["entreprise_results"] = search_instruments(
-                    q.strip(), max_results=8,
-                    finnhub_key=config.secrets.finnhub_api_key)
-        res = st.session_state.get("entreprise_results")
-        if res:
-            opts = {libelle_resultat(r): r for r in res}
-            pick = st.selectbox("Resultat", list(opts), key="entreprise_pick")
-            if st.button("Afficher cette entreprise", use_container_width=True):
-                r = opts[pick]
-                hors = dict(st.session_state.get("entreprise_hors") or {})
-                hors[r["symbol"]] = r["nom"]
-                st.session_state["entreprise_hors"] = hors
-                st.session_state["entreprise_ticker"] = r["symbol"]
-                st.rerun()
-        elif res == []:
-            st.caption("Aucun resultat. Essaie un autre nom, ou le ticker exact (ex : NVDA).")
-    return choix
-
-
 def bloc_marche(choix: str) -> None:
     """Cours, indicateurs, fondamentaux et avis d'analystes d'une valeur suivie.
 
@@ -755,29 +716,35 @@ def bloc_marche(choix: str) -> None:
 
 def page_instrument():
     titre_page("🔎", "Une entreprise",
-               "Cours, actualites, fondamentaux et analyse approfondie d'une valeur.")
-    choix = selecteur_entreprise()
-    if choix:
-        # Une entreprise trouvee par recherche n'est pas dans la watchlist : ses
-        # cours et fondamentaux ne sont pas en base, seule l'analyse fonctionne.
-        suivie = any(i.ticker == choix for i in config.watchlist)
+               "Le detail d'une valeur que tu suis : cours, chiffres, actualites.")
+    noms = {i.ticker: i.nom for i in config.watchlist}
+    if not noms:
+        st.warning("Aucune valeur suivie. Ajoute-en dans « Ma liste ».")
+        return
 
-        bloc_marche(choix) if suivie else st.info(
-            f"{choix} n'est pas dans ta liste : ses cours, fondamentaux et "
-            "actualites ne sont donc pas suivis. L'analyse approfondie plus bas "
-            "fonctionne quand meme — c'est souvent comme ca qu'on decide "
-            "d'ajouter une valeur.")
+    choix = st.selectbox("Entreprise", list(noms),
+                         format_func=lambda t: f"{t} — {noms[t]}",
+                         key="entreprise_ticker")
+    bloc_marche(choix)
 
-        # --- Ses actualites (etaient sur une page separee) ---
-        if suivie:
-            st.markdown("#### Ses actualites")
-            bloc_news_entreprise(choix)
+    # Replie par defaut : les actualites d'une valeur representent l'essentiel du
+    # poids de la page (une dizaine d'articles avec leur resume). On vient le plus
+    # souvent voir un cours ; les lire est un second geste.
+    nb_news = len(db.get_news(choix) or [])
+    with st.expander(f"📰 Ses actualites ({nb_news})" if nb_news else "📰 Ses actualites"):
+        bloc_news_entreprise(choix)
 
-        # --- Analyse approfondie, a la demande ---
-        section_analyse(choix)
-    else:
-        st.warning("Aucune valeur suivie. Ajoute-en dans « Ma liste », "
-                   "ou cherche une entreprise ci-dessus.")
+    # Passerelle vers l'exploration : l'analyse s'applique a n'importe quelle
+    # societe cotee, elle n'a donc pas sa place sur une fiche de suivi.
+    st.divider()
+    try:
+        st.page_link(PAGE_ANALYSER, label="Analyser les comptes de cette entreprise",
+                     use_container_width=True)
+    except Exception:  # rendu degrade si l'objet de page n'est pas disponible
+        st.caption("🔬 Pour une analyse financiere complete, va sur « Analyser ».")
+    st.caption("L'analyse financiere complete vit sur sa propre page : elle "
+               "s'applique a toute entreprise cotee, pas seulement a celles que "
+               "tu suis.")
 
 
 # --------------------------------------------------------------------------
@@ -1092,9 +1059,9 @@ def page_briefing():
                     rendre_news(n, analyses.get(n.get("headline", "")), compact=True)
 
 # --------------------------------------------------------------------------
-# PAGE VN DIAGNOSTIC : analyse financiere (chiffres = code, conclusions = Opus 4.8)
+# ANALYSE APPROFONDIE : chiffres = code, conclusions = Claude (page Analyser)
 # Affichage PROGRESSIF (pas d'effet tunnel) : chiffres instantanes + conclusions
-# streamees par etape ; executive summary rempli en haut a la fin.
+# streamees par etape ; conclusion generale remplie en haut a la fin.
 #
 # PERSISTANCE : chaque etape terminee est ecrite en base (statut 'partiel'), le
 # resume final la passe en 'complet'. Une coupure reseau en cours de generation
@@ -1157,15 +1124,15 @@ def _rendre_diag_statique(r: dict) -> None:
     _entete_diag(diag)
     genere = r.get("generated_at")
     if genere:
-        st.caption(f"💾 Diagnostic conserve, genere le **{fmt_dt(genere)}** "
+        st.caption(f"💾 Analyse conservee, faite le **{fmt_dt(genere)}** "
                    "(aucun appel Claude pour l'afficher).")
     if r.get("statut") == "partiel":
-        st.warning("⚠️ Diagnostic incomplet : la generation a ete interrompue (coupure "
-                   "reseau ?). Les etapes ci-dessous sont conservees ; relance « Analyser » "
-                   "pour la version complete.")
+        st.warning("⚠️ Analyse incomplete : la generation a ete interrompue (coupure "
+                   "reseau ?). Les etapes ci-dessous sont conservees ; relance "
+                   "« Refaire l'analyse » pour la version complete.")
     if r.get("resume"):
-        st.markdown("### Executive summary")
-        st.caption("🤖 LLM · Claude Opus 4.8")
+        st.markdown("### Conclusion generale")
+        st.caption("🤖 Ecrite par Claude")
         afficher_badge_reco(r.get("reco", ""))
         st.markdown(r["resume"])
     st.divider()
@@ -1175,7 +1142,7 @@ def _rendre_diag_statique(r: dict) -> None:
         _rendre_etape_chiffres(etape, d_exo, d_maj)
         concl = r["conclusions"].get(etape["id"])
         if concl:
-            st.caption("🤖 Conclusion — LLM · Claude Opus 4.8")
+            st.caption("🤖 Conclusion ecrite par Claude")
             st.markdown(concl)
 
 
@@ -1215,14 +1182,9 @@ def _sauver_diag(diag: dict, conclusions: dict, resume: str,
 def section_analyse(ticker: str) -> None:
     """Analyse financiere approfondie d'UNE entreprise, a la demande.
 
-    Etait une page a part ("VN Diagnostic"), avec sa propre recherche et sa
-    propre liste de diagnostics conserves. Elle vit desormais au bas de la fiche
-    de l'entreprise : on choisit une entreprise une seule fois, et l'analyse
-    deja produite se rouvre toute seule, sans nouvel appel paye.
+    Rendue par page_analyser. Une analyse deja produite se rouvre telle quelle,
+    sans nouvel appel paye.
     """
-    st.divider()
-    st.markdown("#### 🔬 Analyse approfondie")
-
     stocke = _diag_depuis_ligne(db.get_diagnostic(ticker))
     if not config.secrets.anthropic_api_key:
         st.info("Cle Claude absente : l'analyse approfondie n'est pas disponible.")
@@ -1250,6 +1212,86 @@ def section_analyse(ticker: str) -> None:
         _lancer_analyse(ticker)
     elif stocke:
         _rendre_diag_statique(stocke)
+
+
+# --------------------------------------------------------------------------
+# PAGE ANALYSER : l'analyse financiere de N'IMPORTE QUELLE entreprise cotee
+# --------------------------------------------------------------------------
+# Portee volontairement DIFFERENTE de « Une entreprise » : ici on explore le
+# marche entier, sans rien supposer d'une watchlist. Aucune donnee locale n'est
+# requise — les comptes sont recuperes en direct. C'est aussi ce qui alimente la
+# decision de suivre une valeur : d'ou le bouton d'ajout apres l'analyse.
+# --------------------------------------------------------------------------
+def selecteur_analyse() -> str | None:
+    """Entreprise a analyser. La recherche ouvre tout le marche ; les valeurs
+    suivies et les analyses deja faites sont proposees en raccourci."""
+    noms = {}
+    for d in db.list_diagnostics():                    # deja analysees d'abord
+        noms[d["ticker"]] = d.get("nom") or d["ticker"]
+    for i in config.watchlist:                         # puis les valeurs suivies
+        noms.setdefault(i.ticker, i.nom)
+    noms.update(st.session_state.get("analyse_trouvees") or {})
+
+    with st.form("form_analyse_recherche", clear_on_submit=False):
+        q = st.text_input("Quelle entreprise ?", key="analyse_q",
+                          placeholder="ex : Peugeot, NVDA, Alibaba, ASML...")
+        btn = st.form_submit_button("🔎 Chercher", use_container_width=True)
+    if btn and q.strip():
+        with st.spinner("Recherche..."):
+            st.session_state["analyse_results"] = search_instruments(
+                q.strip(), max_results=8,
+                finnhub_key=config.secrets.finnhub_api_key)
+
+    res = st.session_state.get("analyse_results")
+    if res:
+        opts = {libelle_resultat(r): r for r in res}
+        pick = st.selectbox("Resultat de la recherche", list(opts), key="analyse_pick")
+        if st.button("Choisir cette entreprise", use_container_width=True):
+            r = opts[pick]
+            trouvees = dict(st.session_state.get("analyse_trouvees") or {})
+            trouvees[r["symbol"]] = r["nom"]
+            st.session_state["analyse_trouvees"] = trouvees
+            st.session_state["analyse_ticker"] = r["symbol"]
+            st.session_state["analyse_results"] = None
+            st.rerun()
+    elif res == []:
+        st.caption("Aucun resultat. Essaie un autre nom, ou le ticker exact (ex : NVDA).")
+
+    if not noms:
+        return None
+    return st.selectbox("Entreprise a analyser", list(noms),
+                        format_func=lambda t: f"{t} — {noms[t]}",
+                        key="analyse_ticker")
+
+
+def page_analyser():
+    titre_page("🔬", "Analyser",
+               "L'analyse financiere complete de n'importe quelle entreprise cotee.")
+    ticker = selecteur_analyse()
+    if not ticker:
+        st.info("Cherche une entreprise ci-dessus pour l'analyser. Pas besoin de la "
+                "suivre : l'analyse fonctionne sur toute societe cotee.")
+        return
+
+    st.divider()
+    section_analyse(ticker)
+
+    # L'analyse sert souvent a decider si on suit la valeur : le geste est ici.
+    if not any(i.ticker == ticker for i in config.watchlist):
+        st.divider()
+        nom = (st.session_state.get("analyse_trouvees") or {}).get(ticker, ticker)
+        if st.button(f"➕ Suivre {ticker} au quotidien", use_container_width=True):
+            rows = [{"ticker": i.ticker, "nom": i.nom, "type": i.type, "theme": i.theme}
+                    for i in config.watchlist]
+            with st.spinner("Ajout a ta liste..."):
+                rows.append({"ticker": ticker, "nom": nom, "type": "action",
+                             "theme": suggest_theme(ticker, "action")})
+                save_watchlist(rows)
+            st.success(f"✅ {ticker} ajoute. Ses cours et actualites se rempliront "
+                       "a la prochaine actualisation.")
+            st.rerun()
+        st.caption("Tu ne suis pas encore cette entreprise : l'ajouter fera "
+                   "apparaitre son cours, ses actualites et sa fiche.")
 
 
 def _lancer_analyse(ticker: str) -> None:
@@ -1671,21 +1713,29 @@ def page_about():
             "generations Claude en ont besoin."
         )
 
-    with st.expander("📄 Les quatre pages"):
+    with st.expander("📄 Les cinq pages"):
         st.markdown(
+            "Quatre pages parlent des valeurs **que tu suis**. La cinquieme, "
+            "**Analyser**, s'applique a **n'importe quelle entreprise cotee** — "
+            "c'est la difference de portee qui justifie qu'elle soit a part.\n\n"
             "**📈 Aujourd'hui** — Ce qui a bouge sur tes valeurs : cours et signaux, "
             "echeances a venir, puis le fil des actualites recentes. C'est la page "
             "d'accueil parce que c'est la question qu'on se pose en ouvrant l'app.\n\n"
             "**✏️ Ma liste** — Les valeurs que tu suis : ajouter, retirer, "
             "re-thematiser, et les suggestions d'ajout. C'est par la qu'on commence.\n\n"
-            "**🔎 Une entreprise** — La fiche complete d'UNE valeur : son cours, ses "
-            "actualites, ses chiffres cles, l'avis des analystes, et l'analyse "
-            "approfondie a la demande. Tu peux aussi y chercher une entreprise que tu "
-            "ne suis pas encore, pour l'analyser avant de decider de l'ajouter.\n\n"
+            "**🔎 Une entreprise** — Le detail d'UNE valeur suivie : son cours, ses "
+            "chiffres cles, l'avis des analystes, ses actualites. Tout vient de la "
+            "base locale, donc uniquement pour les valeurs de ta liste.\n\n"
             "**🧠 Ma synthese** — La lecture d'ensemble de tes valeurs, ecrite par "
             "Claude, avec une recommandation par valeur.\n\n"
-            "_L'analyse approfondie suit le deroule en etapes de la methode "
-            "d'analyse financiere de **Veronique Nguyen**._"
+            "**🔬 Analyser** — L'analyse financiere complete de **toute entreprise "
+            "cotee**, suivie ou non : sept etapes (marges, rentabilite, creation de "
+            "valeur, solidite, cash, croissance, valorisation) puis une conclusion "
+            "ecrite. Rien n'a besoin d'etre en base : les comptes sont recuperes en "
+            "direct. C'est aussi la page ou l'on decide de suivre une valeur — le "
+            "bouton d'ajout est juste sous l'analyse.\n\n"
+            "_Le deroule en etapes suit la methode d'analyse financiere de "
+            "**Veronique Nguyen**._"
         )
 
     with st.expander("🎨 Codes couleur et symboles"):
@@ -1720,7 +1770,7 @@ def page_about():
             "| Actualiser les actualites | quelques secondes | tres faible |\n"
             "| Ecrire ma synthese | ~30 s | 1 appel pour toute la liste |\n"
             "| Generer des suggestions | ~20 s | 1 appel |\n"
-            "| Analyser cette entreprise | ~1 min | le plus cher : 1 appel par etape |\n"
+            "| Analyser (page Analyser) | ~1 min | le plus cher : 1 appel par etape |\n"
             "| Tout mettre a jour | quelques secondes | cours + actualites, **pas** la "
             "synthese |\n\n"
             "Deux garde-fous evitent de payer deux fois : la synthese est reprise du "
@@ -1839,7 +1889,13 @@ if not config.watchlist:
 
 # Chaque page est nommee par la QUESTION a laquelle elle repond, et l'ordre suit
 # celui dans lequel on s'en sert : quoi de neuf, ce que je suis, une valeur en
-# particulier, la lecture d'ensemble.
+# particulier, la lecture d'ensemble — puis l'exploration hors watchlist.
+#
+# Defini avant PAGES : page_instrument y renvoie via st.page_link, et les pages
+# ne sont rendues qu'apres navigation.run(), donc la variable existe a temps.
+PAGE_ANALYSER = st.Page(page_analyser, title="Analyser", icon="🔬",
+                        url_path="analyser")
+
 PAGES = [
     # Page par defaut : Streamlit la sert a la racine « / » (son url_path n'est pas
     # utilise dans les liens). C'est elle qu'on retrouve apres une reconnexion sans
@@ -1848,6 +1904,8 @@ PAGES = [
     st.Page(page_watchlist, title="Ma liste", icon="✏️", url_path="ma-liste"),
     st.Page(page_instrument, title="Une entreprise", icon="🔎", url_path="entreprise"),
     st.Page(page_briefing, title="Ma synthese", icon="🧠", url_path="synthese"),
+    # Portee differente des quatre precedentes : tout le marche, pas la watchlist.
+    PAGE_ANALYSER,
     st.Page(page_about, title="Aide", icon="ℹ️", url_path="aide"),
 ]
 navigation = st.navigation(PAGES, position="sidebar")
