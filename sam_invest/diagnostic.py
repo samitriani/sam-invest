@@ -96,14 +96,14 @@ def _cagr(df, label, latest):
 
 
 def L(label, valeur, source, doute=False):
-    """Une ligne de resultat. source ∈ {'yfinance','calcule'} ; doute -> drapeau 🚬."""
+    """Une ligne de resultat. source ∈ {'yfinance','calcule'} ; doute -> drapeau ⚠️."""
     return {"label": label, "valeur": valeur, "source": source, "doute": doute}
 
 
 def _dt(condition, valeur) -> bool:
     """Drapeau de doute, uniquement si la valeur existe.
 
-    Evite d'afficher "🚬 n/d" : une donnee absente est deja signalee comme telle,
+    Evite d'afficher "⚠️ n/d" : une donnee absente est deja signalee comme telle,
     la marquer douteuse en plus n'apprend rien et brouille le tableau.
     """
     return bool(condition) and valeur is not None
@@ -207,7 +207,7 @@ def construire_diagnostic(config: AppConfig, ticker: str) -> dict:
     financiere = _est_financiere(info.get("sector"), gross, op_income, cur_assets)
     NOTE_FIN = ("Societe financiere (banque, assureur ou holding) : le resultat "
                 "provient surtout de postes hors chiffre d'affaires (juste valeur, "
-                "marge d'interet, primes). Les ratios rapportes au CA, marques 🚬, "
+                "marge d'interet, primes). Les ratios rapportes au CA, marques ⚠️, "
                 "ne sont pas comparables a ceux d'une societe industrielle.")
 
     etapes = []
@@ -319,7 +319,7 @@ def construire_diagnostic(config: AppConfig, ticker: str) -> dict:
     if mismatch:
         notes.append(f"Fiabilite reduite : etats financiers en {dev} mais cotation en {dc}. "
                      "Les ratios melant capitalisation et postes comptables (WACC, PBR, P/S) "
-                     "peuvent etre fausses par le change (marques 🚬).")
+                     "peuvent etre fausses par le change (marques ⚠️).")
     if financiere:
         notes.append(NOTE_FIN)
     if market_cap is None or beta is None:

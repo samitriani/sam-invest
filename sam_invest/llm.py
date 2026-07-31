@@ -405,7 +405,7 @@ DIAG_ETAPE_SYSTEM = (
     "REGLES : tu n'inventes ni ne recalcules aucun chiffre (tu peux citer ceux fournis) ; "
     "pas de verdict acheter/vendre ; reponds directement, sans preambule ni titre. "
     "Si tu cites un chiffre dont tu n'es pas sur, ou une valeur absente des donnees fournies, "
-    "ou marquee 🚬, prefixe-la de 🚬."
+    "ou marquee ⚠️, prefixe-la de ⚠️."
 )
 
 DIAG_SUMMARY_SYSTEM = (
@@ -422,7 +422,7 @@ DIAG_SUMMARY_SYSTEM = (
     "« RECO: GARDER », ou « RECO: VENDRE ») — un seul de ces trois mots, en majuscules, "
     "rien d'autre sur cette ligne. C'est une heuristique de lecture, pas un ordre. "
     "REGLES : aucun chiffre invente (cite ceux fournis) ; "
-    "si tu cites un chiffre incertain ou marque 🚬, prefixe-le de 🚬 ; "
+    "si tu cites un chiffre incertain ou marque ⚠️, prefixe-le de ⚠️ ; "
     "termine par un rappel d'une ligne : ceci n'est pas un conseil en investissement, "
     "la decision finale appartient a l'utilisateur."
 )
@@ -431,7 +431,7 @@ DIAG_SUMMARY_SYSTEM = (
 def _diag_lignes_txt(lignes: list) -> str:
     out = []
     for ligne in lignes:
-        mark = " 🚬(douteux)" if ligne.get("doute") else ""
+        mark = " ⚠️(douteux)" if ligne.get("doute") else ""
         out.append(f"- {ligne['label']} : {ligne['valeur']} [{ligne['source']}]{mark}")
     return "\n".join(out)
 

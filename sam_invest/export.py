@@ -2,12 +2,12 @@
 
 Assemble en un seul fichier .md, pensé pour etre recolle a Claude ensuite :
   - metadonnees (date d'export, devise, horodatage des dernieres MAJ) ;
-  - une legende des codes maison (flags, RSI, 🚬) que Claude ne devine pas ;
-  - page Donnees : tableau signaux (actions/ETF) + calendrier & estimations ;
-  - page News : news brutes + classement Haiku (categorie/tonalite/traduction) ;
-  - page Briefing : synthese globale + briefing 3 parties + reco par instrument ;
-  - page VN Diagnostic : diagnostic le plus recent (si realise) ;
-  - section Suggestions (page Watchlist) : candidats d'ajout generes durant la
+  - une legende des codes maison (flags, RSI, ⚠️) que Claude ne devine pas ;
+  - Aujourd'hui : tableau signaux (actions/ETF) + calendrier & estimations ;
+  - actualites : brutes + classement Haiku (categorie/tonalite/traduction) ;
+  - Ma synthese : synthese globale + analyse 3 parties + reco par instrument ;
+  - analyse approfondie : la plus recente (si realisee) ;
+  - section Suggestions (page Ma liste) : candidats d'ajout generes durant la
     session (si l'utilisateur a clique sur « Generer des suggestions »).
 
 Tout est DETERMINISTE cote chiffres (lu en base, ou calcule en direct pour les
@@ -116,7 +116,7 @@ def _entete(config: AppConfig) -> list[str]:
         "- **Avis des analystes** : consensus = nb d'analystes par avis (achat fort / achat / "
         "conserver / vendre / vendre fort) ; changements d'avis = 🟢 releve · 🔴 abaisse · "
         "🆕 initie · ⚪ confirme.",
-        "- **🚬** (section Diagnostic) = chiffre marque douteux (aberration ou effet de "
+        "- **⚠️** (section Diagnostic) = chiffre marque douteux (aberration ou effet de "
         "change).",
         "",
         "---",
@@ -392,14 +392,14 @@ def _section_diagnostic(diag_result: dict | None) -> list[str]:
     diag = diag_result["diag"]
     conclusions = diag_result.get("conclusions", {})
     resume = diag_result.get("resume", "")
-    out = ["## 5. VN Diagnostic financier (le plus recent)", ""]
+    out = ["## 5. Analyse financiere approfondie (la plus recente)", ""]
     entete = f"### {diag.get('nom')} ({diag.get('ticker')})"
     if diag.get("devise"):
         entete += f" · {diag['devise']}"
     out.append(entete)
     annee, dref = diag.get("annee"), diag.get("date_reference")
     exo = (f"Exercice {annee}" + (f" (cloture {dref})" if dref else "")) if annee else (dref or "date n/d")
-    out.append(f"_Chiffres : {exo} (source yfinance). 🚬 = chiffre douteux._")
+    out.append(f"_Chiffres : {exo} (source yfinance). ⚠️ = chiffre a verifier._")
     if diag.get("note_fiabilite"):
         out.append(f"> ⚠️ {diag['note_fiabilite']}")
     out.append("")
@@ -417,11 +417,11 @@ def _section_diagnostic(diag_result: dict | None) -> list[str]:
         out.append("| Indicateur | Valeur | Source |")
         out.append("|---|---|---|")
         for ligne in etape["lignes"]:
-            valeur = f"🚬 {ligne['valeur']}" if ligne.get("doute") else ligne["valeur"]
+            valeur = f"⚠️ {ligne['valeur']}" if ligne.get("doute") else ligne["valeur"]
             out.append(f"| {_cell(ligne['label'])} | {_cell(valeur)} | {_cell(ligne['source'])} |")
         out.append("")
         if etape.get("note"):  # mise en garde propre a l'etape (societe financiere...)
-            out.append(f"> 🚬 {etape['note']}")
+            out.append(f"> ⚠️ {etape['note']}")
             out.append("")
         concl = conclusions.get(etape["id"])
         if concl:

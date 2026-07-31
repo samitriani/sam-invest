@@ -22,7 +22,7 @@ C'est une **liste d'instruments a surveiller** : le systeme
 - **Couche jugement** (`sam_invest/llm.py`) : API Claude. Sert **uniquement** a
   resumer/classer les news (Haiku) et a rediger une synthese en langage naturel
   a partir des chiffres fournis (Sonnet). Claude ne produit jamais un prix ni un
-  ratio. Le briefing et le VN Diagnostic se terminent par une **recommandation**
+  ratio. La synthese et l'analyse approfondie se terminent par une **recommandation**
   ACHAT / GARDER / VENDRE, affichee en badge colore (le mot est toujours ecrit :
   la couleur ne fait que le renforcer). C'est une heuristique de lecture des
   chiffres et des news, **pas un conseil financier**. La decision reste humaine.
@@ -59,8 +59,9 @@ plus-haut/plus-bas 52 semaines, variation seance, drawdown.
    - Cree une cle sur [console.anthropic.com](https://console.anthropic.com/settings/keys)
      (necessite un compte + credit/carte enregistree).
    - Colle-la dans `.env` : `ANTHROPIC_API_KEY=sk-ant-...`
-   - Sans cle, l'app se lance mais **News, Briefing et VN Diagnostic sont
-     desactives** (les pages Donnees et Par instrument restent utilisables).
+   - Sans cle, l'app se lance mais **le classement des actualites, la synthese et
+     l'analyse approfondie sont desactives** (cours, chiffres cles et fiches
+     entreprise restent utilisables).
    - `FINNHUB_API_KEY` / `FMP_API_KEY` restent **facultatives** (repli si
      yfinance echoue) : laisse-les vides pour demarrer, tu peux y revenir plus tard.
 4. La base **`data/sam_invest.db`** (historique/cache) se **cree automatiquement**
@@ -73,75 +74,67 @@ Apres ca, **plus jamais de ligne de commande**.
 **Double-clique sur `launch_windows.bat`** → le navigateur s'ouvre sur l'app.
 Pour arreter : ferme la fenetre noire.
 
-### 7 pages dans le menu ☰ (+ actions globales dans ce meme menu)
+### Premier lancement : l'ecran de demarrage
+
+Tant qu'aucune valeur n'est suivie, l'app n'affiche **ni menu ni tableau vide** :
+juste un ecran de bienvenue avec un champ de recherche et quelques exemples.
+On coche deux ou trois entreprises, on clique **« Ajouter et commencer »**, et le
+menu complet apparait. Montrer une machine a l'arret est le meilleur moyen de
+perdre quelqu'un qui decouvre l'outil.
+
+### 4 pages dans le menu ☰ (+ actions globales dans ce meme menu)
 La navigation est un **menu burger** (icone ☰ en haut a gauche sur telephone ; menu
 lateral deplie sur grand ecran). Une seule page est chargee a la fois — page legere
 sur mobile — et **l'adresse porte la page courante**, donc une coupure de connexion
 suivie d'une reconnexion ramene exactement ou on etait.
 
-Le menu contient aussi **« Tout mettre a jour »**, **« Exporter (.md) »** et la
-fraicheur des donnees/news. Chaque page a par ailleurs son propre bouton de mise a
-jour et affiche sa derniere date/heure, pour maitriser la consommation d'API Claude :
+Chaque page est nommee par la **question a laquelle elle repond**, et l'ordre du
+menu suit celui dans lequel on s'en sert. Le menu contient aussi
+**« Tout mettre a jour »**, **« Exporter (.md) »** et la fraicheur des donnees.
 
-- **📈 Donnees** _(0 appel Claude)_ : met a jour prix + fondamentaux + evenements/
-  estimations + **avis des analystes** + profils. Vue d'ensemble de la watchlist :
-  tableau signaux et section **« A venir & estimations »** (avec le consensus
-  Achat/Conserver/Vendre). Chaque section — *Actions*, *ETF*, *Calendrier*,
-  *Estimations, revisions & consensus* — est **pliable** : on replie ce qu'on ne
-  lit pas, l'etat est conserve pendant la session.
-- **🔎 Par instrument** _(0 appel Claude)_ : le detail d'UN instrument, en trois
-  sous-parties : *Cours de l'instrument* (graphique + indicateurs), *Fondamentaux*
-  (actions : PER, P/B, marges, ROE, croissance, dette, FCF, dividende, objectif ;
-  ETF : categorie, encours, TER, rendement, perf YTD, top holdings) et *Avis des
-  analystes* (actions : consensus + tendance vs mois dernier + derniers
-  upgrades/downgrades par firme sur 90 j). Si les donnees de l'instrument ne sont
-  pas du jour, elles sont recuperees automatiquement (1 tentative par jour).
-- **📰 News** _(Claude Haiku)_ : recupere et classe les news. Affiche les news par
-  instrument (brutes toujours visibles, enrichies si analysees).
-- **🧠 Briefing** _(Claude Sonnet, a la demande)_ : reprend le contenu des pages
-  **Donnees** et **News** ; si l'un des deux date de plus de 2 h (ou n'a jamais ete
-  recupere), un message invite a le rafraichir avant de generer. Une section
-  **🌍 Global** (vue d'ensemble big-picture) puis une section
-  **📋 Par instrument**. Chaque volet donne un briefing en **3 parties** —
-  **📊 analyse des chiffres** (page Donnees), **📰 analyse des news** (page News),
-  **🎯 conclusion & arguments** — plus une **recommandation ACHAT / GARDER / VENDRE**
-  en badge colore, visible dans le titre de la section sans avoir a l'ouvrir. Un seul
-  appel Sonnet couvre le global ET tous les instruments. La reco est une heuristique
-  du LLM, **pas un conseil financier** — la decision reste humaine.
-- **🔬 VN Diagnostic** _(Claude Opus 4.8, a la demande)_ : recherche une entreprise
-  (Yahoo), calcule un diagnostic financier complet (marges, ROE/ROA/ROIC, WACC/EVA,
-  structure financiere, cash, croissance, valorisation) et redige une conclusion par
-  etape + un executive summary termine par la meme **recommandation** en badge
-  (streaming, affichage progressif).
-  Actions uniquement. « VN » renvoie a **Veronique Nguyen**, dont la methode
-  d'analyse financiere inspire le deroule en etapes. Les diagnostics sont **conserves en base** et rechargeables
-  gratuitement (liste deroulante en haut de page) ; l'ecriture se fait **apres
-  chaque etape**, donc une coupure reseau en pleine generation ne perd jamais ce qui
-  a deja ete paye a Opus (le diagnostic est alors marque « ⚠️ incomplet »).
-- **✏️ Watchlist** : tout ce qui touche a la liste suivie, au meme endroit.
-  1. **Recherche par nom** (« air liquide » → `AI.PA`) via Yahoo, sans connaitre
-     les tickers, + ajout manuel d'un ticker.
-  2. **Edition ligne par ligne** (nom, type, theme, retrait 🗑️). Enregistree dans
-     config.yaml sans toucher aux regles.
-  3. **💡 Suggestions d'ajout** _(Claude Sonnet, a la demande)_ — ex-page « Idees »,
-     fusionnee ici : proposer un instrument et l'ajouter etaient deux pages pour un
-     seul geste. Combine des **pairs Finnhub** (entreprises comparables aux actions
-     suivies, deterministe) et des **suggestions thematiques Claude** (trous de
-     diversification : theme/zone sous-representee). Chaque ticker candidat, quelle
-     que soit son origine, est d'abord **valide** par une recherche Yahoo puis
-     **chiffre en direct** par le meme code que la page Donnees (cours, tendance,
-     RSI, fondamentaux, consensus analystes) — aucun ticker ni chiffre invente n'est
-     affiche. Bouton **« Ajouter a la watchlist »** en un clic ; les donnees du
-     nouvel instrument se rempliront automatiquement a la premiere visite de la
-     page Par instrument.
-- **ℹ️ A propos** : **toutes les explications de l'app** (methodologie code/LLM,
-  role de chaque page, code des recos et symboles 🆕/🚬, cout de chaque bouton,
-  sources de donnees, glossaire filtrable). Les pages de travail ne gardent qu'une
-  ligne de contexte : sur un ecran de telephone, chaque paragraphe en dur repousse
-  les chiffres hors de l'ecran.
+- **📈 Aujourd'hui** — *« Quoi de neuf ? »* C'est l'accueil, parce que c'est la
+  question qu'on se pose en ouvrant l'app. Tableau des cours et signaux (*Actions*
+  / *ETF*, sections pliables), section **« A venir & estimations »** avec le
+  consensus analystes, puis le **fil des actualites recentes**, tous instruments
+  confondus, du plus recent au plus ancien. Deux boutons : *Actualiser les cours*
+  (gratuit) et *Actualiser les actualites* (Claude Haiku pour le classement et la
+  traduction).
+- **✏️ Ma liste** — *« Qu'est-ce que je suis ? »* Placee en deuxieme parce que
+  c'est par la qu'on commence. Recherche par nom (« air liquide » → `AI.PA`, la
+  cotation principale sortant toujours en tete), edition ligne par ligne (nom,
+  type, theme, retrait 🗑️) et **💡 Suggestions d'ajout** _(Claude Sonnet, a la
+  demande)_ : pairs Finnhub + suggestions thematiques, chaque candidat valide et
+  chiffre par le code avant affichage.
+- **🔎 Une entreprise** — *« Je creuse celle-ci. »* La fiche complete d'UNE valeur,
+  sur un seul ecran defilant : *son cours* (graphique + indicateurs), *ses chiffres
+  cles*, *ce qu'en disent les analystes*, *ses actualites*, puis
+  **l'analyse approfondie** a la demande. Cette derniere _(Claude Opus, ~1 min)_
+  calcule marges, ROE/ROA/ROIC, WACC/EVA, structure financiere, cash, croissance et
+  valorisation, puis redige une conclusion par etape et une conclusion generale
+  avec sa **recommandation**. Elle est **conservee en base** et se rouvre
+  gratuitement a la selection de l'entreprise ; l'ecriture se fait **apres chaque
+  etape**, donc une coupure reseau ne perd jamais ce qui a deja ete paye.
+  Le champ de recherche permet aussi d'afficher une entreprise **hors watchlist** —
+  c'est souvent comme ca qu'on decide d'en ajouter une.
+- **🧠 Ma synthese** — *« Aide-moi a faire le point. »* Une section **🌍 Global**
+  puis une section **📋 Par instrument**. Chaque volet donne une analyse en
+  **3 parties** — chiffres, actualites, conclusion & arguments — plus une
+  **recommandation ACHAT / GARDER / VENDRE** en badge, visible dans le titre sans
+  avoir a l'ouvrir. Un seul appel Sonnet couvre le global ET tous les instruments.
+- **ℹ️ Aide** — methodologie code/LLM, role de chaque page, code des recos et
+  symboles (🆕, ⚠️), cout et duree de chaque bouton, sources de donnees, glossaire
+  filtrable. Les pages de travail ne portent plus de renvoi vers l'aide : une page
+  qui doit pointer son mode d'emploi a chaque en-tete ne s'explique pas toute seule.
 
-Le bouton **« Tout mettre a jour »** (dans le menu ☰) fait Donnees + News, mais
+La recommandation est une heuristique de lecture produite par Claude, **pas un
+conseil en investissement** — la mise en garde est affichee **au-dessus** du badge,
+pour etre lue avant lui. La decision reste humaine.
+
+Le bouton **« Tout mettre a jour »** (dans le menu ☰) fait cours + actualites, mais
 jamais la synthese Sonnet (declenchee uniquement par son bouton dedie).
+
+_L'analyse approfondie suit le deroule en etapes de la methode d'analyse financiere
+de **Veronique Nguyen** (l'app s'est longtemps appelee « VN Diagnostic »)._
 
 ---
 
@@ -209,7 +202,7 @@ zero serveur a gerer, deploiement direct depuis GitHub.
   tout est re-telechargeable, rien n'est perdu de facon permanente.
 - Si tu modifies la watchlist **depuis l'app en ligne**, ce changement ne
   survivra PAS au prochain redeploiement : utilise le bouton **« ⬇️ Telecharger
-  config.yaml »** (page Watchlist) juste apres modification, puis remplace le
+  config.yaml »** (page Ma liste) juste apres modification, puis remplace le
   fichier dans ton depot local et commit/push.
 - `config.yaml` est **versionne dans Git** (aucun secret dedans : juste tickers/
   noms/themes/seuils) — c'est la reference qui alimente le deploiement.

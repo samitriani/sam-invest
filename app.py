@@ -12,13 +12,18 @@ UX MOBILE D'ABORD (usage principal : telephone, en transports) :
   - Tout ce qui coute cher (briefing Sonnet, diagnostic Opus) est PERSISTE EN BASE,
     pas en session : une coupure reseau ne fait jamais perdre un resultat.
 
-Chaque page a son propre bouton de mise a jour, plus une mise a jour globale dans
-le menu. Objectif : maitriser la consommation d'API Claude.
-  - Donnees    : prix + fondamentaux. AUCUN appel Claude.
-  - News       : recup news + classement (Claude Haiku).
-  - Briefing   : flags (deterministes, gratuits) + synthese (Claude Sonnet, au clic).
-  - VN Diagnostic : analyse financiere complete (Claude Opus, au clic).
-  - Watchlist    : edition de la liste + suggestions d'ajout (Claude Sonnet, au clic).
+Quatre pages, nommees par la QUESTION a laquelle elles repondent plutot que par
+l'etage du pipeline qui les alimente. Chacune porte son bouton de mise a jour,
+plus une mise a jour globale dans le menu (consommation d'API maitrisee).
+  - Aujourd'hui    : cours + signaux + echeances, puis le fil d'actualites
+                     (Haiku pour le classement). Les cours sont gratuits.
+  - Ma liste       : edition de la liste + suggestions d'ajout (Sonnet, au clic).
+  - Une entreprise : la fiche complete d'UNE valeur — cours, actualites, chiffres,
+                     analystes — puis l'analyse approfondie (Opus, au clic).
+  - Ma synthese    : alertes (deterministes, gratuites) + synthese (Sonnet, au clic).
+
+Quand la watchlist est vide, la navigation est court-circuitee au profit d'un
+ecran de demarrage : rien d'autre n'a de sens tant qu'aucune valeur n'est suivie.
 
 Separation stricte : chiffres/signaux = code deterministe ; texte = Claude (llm.py).
 """
@@ -233,13 +238,20 @@ def badge_reco_md(reco: str) -> str:
 
 
 def afficher_badge_reco(reco: str) -> None:
-    """Badge de reco en composant (dans le corps d'une section)."""
+    """Badge de reco, precede de sa mise en garde.
+
+    La mise en garde est du TEXTE VISIBLE, au-dessus du badge, et non une
+    infobulle : sur telephone il n'y a pas de survol, et elle doit etre lue
+    AVANT la recommandation — a fortiori si l'app est ouverte a d'autres
+    personnes, qui n'ont pas le contexte de celui qui l'a construite.
+    """
     entree = RECO_LABEL.get(reco or "")
     if entree:
         mot, couleur = entree
-        st.badge(mot, color=couleur,
-                 help="Heuristique de lecture generee par Claude a partir des chiffres "
-                      "et des news — pas un conseil financier. La decision reste tienne.")
+        st.caption("Lecture des chiffres et des actualites par Claude — "
+                   "**ce n'est pas un conseil en investissement.** "
+                   "La decision reste la tienne.")
+        st.badge(mot, color=couleur)
 
 
 def bloc_metriques(items) -> None:
@@ -411,15 +423,71 @@ def rendre_news(n: dict, a: dict | None = None, compact: bool = False) -> None:
         st.caption(meta_txt)
 
 
+# --------------------------------------------------------------------------
+# ACTUALITES : un fil date sur "Aujourd'hui", un bloc sur la fiche entreprise
+# --------------------------------------------------------------------------
+# L'ancienne page News redressait une SECONDE liste de la watchlist, un volet
+# par valeur. Les actualites ne sont pas une facon d'enumerer le portefeuille :
+# elles sont datees. Elles vivent donc en fil chronologique la ou on demande
+# « quoi de neuf ? », et par entreprise sur la fiche de l'entreprise.
+# --------------------------------------------------------------------------
+def _analyses_news(ticker: str) -> dict:
+    """Classement Claude des news d'un ticker, indexe par titre original. {} si absent."""
+    na = db.get_news_analysis(ticker)
+    if not na or not na.get("payload"):
+        return {}
+    try:
+        return {a.get("headline", ""): a for a in json.loads(na["payload"])}
+    except Exception:
+        return {}
+
+
+def bloc_news_entreprise(ticker: str) -> None:
+    """Toutes les actualites connues d'UNE entreprise."""
+    raw = db.get_news(ticker)
+    if not raw:
+        st.caption("Aucune actualite en base pour cette entreprise. "
+                   "Lance « Actualiser les actualites » sur Aujourd'hui.")
+        return
+    analyses = _analyses_news(ticker)
+    for i, n in enumerate(raw):
+        if i:
+            st.divider()
+        rendre_news(n, analyses.get(n.get("headline", "")), compact=False)
+
+
+def fil_actualites(limite: int = 12) -> None:
+    """Fil chronologique tous instruments confondus, du plus recent au plus ancien."""
+    items = []
+    for inst in config.watchlist:
+        analyses = _analyses_news(inst.ticker)
+        for n in db.get_news(inst.ticker) or []:
+            items.append((n.get("datetime", ""), inst.ticker, n,
+                          analyses.get(n.get("headline", ""))))
+    if not items:
+        st.caption("Aucune actualite en base. Clique sur « Actualiser les actualites ».")
+        return
+    items.sort(key=lambda x: x[0], reverse=True)
+    for i, (_, ticker, n, a) in enumerate(items[:limite]):
+        if i:
+            st.divider()
+        st.caption(f"**{ticker}**")
+        rendre_news(n, a, compact=False)
+    if len(items) > limite:
+        st.caption(f"{len(items) - limite} actualite(s) plus ancienne(s) : "
+                   "elles restent sur la fiche de chaque entreprise.")
+
+
 def titre_page(icone: str, titre: str, accroche: str) -> None:
     """En-tete compact de page : une ligne de titre + une ligne de contexte.
 
-    Le detail (methodo, couts, code couleur, glossaire) vit dans la page
-    "A propos" : sur un ecran de telephone, chaque paragraphe en dur repousse
-    les chiffres hors de l'ecran.
+    L'accroche dit ce qu'on vient CHERCHER sur la page, pas comment elle est
+    fabriquee : ni nom de modele, ni cout, ni source. Ce detail vit dans l'Aide,
+    et le renvoi systematique vers celle-ci a ete retire — une page qui a besoin
+    de pointer son mode d'emploi a chaque en-tete ne s'explique pas toute seule.
     """
     st.markdown(f"### {icone} {titre}")
-    st.caption(accroche + "  ·  _Details dans **ℹ️ A propos** (menu ☰)._")
+    st.caption(accroche)
 
 
 # ==========================================================================
@@ -429,13 +497,13 @@ def titre_page(icone: str, titre: str, accroche: str) -> None:
 # PAGE DONNEES : prix + fondamentaux + signaux (aucun appel Claude)
 # --------------------------------------------------------------------------
 def page_donnees():
-    titre_page("📈", "Donnees", "Prix + fondamentaux, aucun appel Claude.")
-    if st.button("🔄 Mettre a jour les donnees", use_container_width=True,
+    titre_page("📈", "Aujourd'hui", "Ce qui a bouge sur tes valeurs, et l'actualite du jour.")
+    if st.button("🔄 Actualiser les cours", use_container_width=True,
                  disabled=not config.watchlist):
         afficher_compte_rendu(run_update(update_donnees, "Mise a jour des donnees"))
-    caption_derniere_maj("donnees", "donnees")
+    caption_derniere_maj("donnees", "cours")
 
-    st.subheader("Watchlist & signaux")
+    st.subheader("Mes valeurs")
     snaps = signals.construire_snapshots(config)
 
     def _row(s) -> dict:
@@ -475,9 +543,9 @@ def page_donnees():
                 df = pd.DataFrame([_row(s) for s in sous])
                 st.dataframe(df, use_container_width=True, hide_index=True,
                              column_config=_num_cfg)
-        st.caption("Colonnes vides = lance une mise a jour des donnees.")
+        st.caption("Colonnes vides = lance une actualisation des cours.")
     else:
-        st.warning("Watchlist vide : remplis config.yaml.")
+        st.warning("Aucune valeur suivie : ajoute-en dans « Ma liste ».")
 
     # --- A venir (resultats / ex-dividende) + Estimations (actions) ---
     # Streamlit interdit d'imbriquer un expander dans un expander : « A venir &
@@ -545,145 +613,183 @@ def page_donnees():
         st.caption("Actions uniquement (survole les en-tetes pour la definition de chaque "
                    "colonne).")
 
-
-# --------------------------------------------------------------------------
-# PAGE PAR INSTRUMENT : cours + fondamentaux + analystes d'UN instrument
-# --------------------------------------------------------------------------
-# Detachee de la page Donnees : c'est une consultation ciblee (« ou en est
-# NVDA ? »), pas la vue d'ensemble. La separer evite de faire defiler tout le
-# tableau de la watchlist pour l'atteindre, et allege les deux pages.
-# --------------------------------------------------------------------------
-def page_instrument():
-    titre_page("🔎", "Par instrument",
-               "Cours, fondamentaux et avis d'analystes d'un instrument de la watchlist.")
-    if config.watchlist:
-        tickers = [i.ticker for i in config.watchlist]
-        choix = st.selectbox(
-            "Instrument a afficher", tickers,
-            format_func=lambda t: next((f"{i.ticker} — {i.nom}" for i in config.watchlist if i.ticker == t), t),
-        )
-
-        # --- Auto-recuperation : si les donnees de CET instrument ne sont pas du
-        # jour, on les recupere automatiquement (lui seul, pas toute la watchlist).
-        # Garde-fou : une seule tentative par instrument et par jour dans la session,
-        # pour ne pas re-interroger en boucle un ticker qui ne repond pas.
-        aujourd_hui = datetime.now().strftime("%Y-%m-%d")
-
-        def _quote_du_jour(t: str) -> bool:
-            q = db.get_quote(t)
-            if not q or not q.get("asof"):
-                return False
-            try:
-                d = datetime.fromisoformat(str(q["asof"]))
-                if d.tzinfo is not None:
-                    d = d.astimezone()
-                return d.strftime("%Y-%m-%d") == aujourd_hui
-            except Exception:
-                return False
-
-        tentatives = st.session_state.setdefault("auto_maj_donnees", {})
-        if not _quote_du_jour(choix) and tentatives.get(choix) != aujourd_hui:
-            tentatives[choix] = aujourd_hui
-            with st.spinner(f"Donnees de {choix} pas a jour : recuperation automatique..."):
-                cr_auto = update_donnees_instrument(config, choix)
-            if cr_auto.get("status") == "ok":
-                st.caption(f"✅ Donnees de {choix} recuperees a l'instant.")
-            else:
-                st.warning(f"Impossible de recuperer les donnees de {choix} "
-                           "(reseau/source ?). Reessaie via « Mettre a jour les donnees ».")
-        q_sel = db.get_quote(choix)
-        if q_sel and q_sel.get("asof"):
-            st.caption(f"🕒 Donnees de {choix} : maj {fmt_dt(q_sel['asof'])}.")
-
-        # --- Sous-partie 1 : cours de l'instrument ---
-        st.markdown("#### Cours de l'instrument")
-        hist = db.get_price_history(choix)
-        if hist:
-            dfh = pd.DataFrame(hist)
-            dfh["date"] = pd.to_datetime(dfh["date"])
-            dfh = dfh.set_index("date")
-            # Decimation : quotidien sur ~6 mois recents, hebdomadaire au-dela.
-            # Visuellement identique mais ~2x moins de points rendus (page plus
-            # legere). Les INDICATEURS restent calcules sur l'historique complet.
-            close = dfh["close"]
-            if len(close) > 250:
-                recent = close.iloc[-126:]
-                ancien = close.iloc[:-126].resample("W-FRI").last().dropna()
-                close = pd.concat([ancien, recent])
-                close = close[~close.index.duplicated(keep="last")]
-            st.line_chart(close, height=300)
-
-            ind = indicateurs_ligne(choix)
-            bloc_metriques([
-                ("Dernier", _fmt(ind["last_close"])),
-                ("SMA 50", _fmt(ind["sma_50"])),
-                ("SMA 200", _fmt(ind["sma_200"])),
-                ("RSI 14", _fmt(ind["rsi_14"], dec=0)),
-                ("Plus-haut 52s", _fmt(ind["high_52w"])),
-            ])
-        else:
-            st.caption("Pas encore d'historique pour cet instrument. Lance une mise a jour des donnees.")
-
-        # --- Sous-partie 2 : fondamentaux de l'instrument ---
-        st.markdown("#### Fondamentaux de l'instrument")
-        afficher_fondamentaux(choix)
-
-        # --- Sous-partie 3 : avis des analystes (actions uniquement) ---
-        type_choix = next((i.type for i in config.watchlist if i.ticker == choix), "action")
-        if type_choix.lower() == "action":
-            st.markdown("#### Avis des analystes")
-            afficher_avis_analystes(choix)
-    else:
-        st.warning("Watchlist vide : ajoute un instrument dans la page Watchlist.")
-
-
-# --------------------------------------------------------------------------
-# PAGE NEWS : recup news + classement Haiku
-# --------------------------------------------------------------------------
-def page_news():
-    titre_page("📰", "News", "Recuperation + classement par Claude Haiku.")
-    if st.button("🔄 Mettre a jour les news", use_container_width=True,
+    # --- Actualites du jour (ex-page News) ---
+    st.subheader("📰 Actualites recentes")
+    if st.button("🔄 Actualiser les actualites", use_container_width=True,
                  disabled=not config.watchlist):
         afficher_compte_rendu(run_update(update_news, "Mise a jour des news"))
-    caption_derniere_maj("news", "news")
+    caption_derniere_maj("news", "actualites")
     if not config.secrets.anthropic_api_key:
-        st.info("Sans cle Claude active, les news s'affichent en clair mais ne sont "
-                "ni classees ni resumees.")
-
-    st.subheader("News par instrument")
-    import json as _json
-    une_news = False
-    for inst in config.watchlist:
-        raw = db.get_news(inst.ticker)
-        if not raw:
-            continue
-        une_news = True
-        na = db.get_news_analysis(inst.ticker)
-        analyses = {}
-        if na and na.get("payload"):
-            try:
-                analyses = {a.get("headline", ""): a for a in _json.loads(na["payload"])}
-            except Exception:
-                analyses = {}
-        with st.expander(f"{inst.ticker} — {inst.nom} ({len(raw)} news)"):
-            for i, n in enumerate(raw):
-                if i:
-                    st.divider()
-                rendre_news(n, analyses.get(n.get("headline", "")), compact=False)
-    if not une_news:
-        st.caption("Aucune news en base. Clique sur « Mettre a jour les news ».")
+        st.info("Sans cle Claude, les actualites s'affichent en clair mais ne sont "
+                "ni classees ni traduites.")
+    fil_actualites()
 
 
 # --------------------------------------------------------------------------
-# PAGE BRIEFING : flags (gratuits) + synthese Sonnet (a la demande)
+# PAGE UNE ENTREPRISE : la fiche complete d'UNE valeur
+# --------------------------------------------------------------------------
+# Tout ce qu'on sait d'UNE entreprise sur un seul ecran : cours, fondamentaux,
+# ses actualites, l'avis des analystes, puis l'analyse approfondie a la demande.
+# Auparavant ces quatre blocs vivaient sur trois pages differentes et c'etait au
+# lecteur de les recoudre de tete.
+# --------------------------------------------------------------------------
+def selecteur_entreprise() -> str | None:
+    """Entreprise affichee : la watchlist d'abord, la recherche libre ensuite.
+
+    La recherche reste indispensable : on veut pouvoir analyser une entreprise
+    AVANT de decider de la suivre. Les entreprises trouvees hors watchlist
+    restent selectionnables le temps de la session.
+    """
+    noms = {i.ticker: i.nom for i in config.watchlist}
+    noms.update(st.session_state.get("entreprise_hors") or {})
+
+    choix = None
+    if noms:
+        choix = st.selectbox("Entreprise", list(noms),
+                             format_func=lambda t: f"{t} — {noms[t]}",
+                             key="entreprise_ticker")
+
+    with st.expander("🔎 Chercher une entreprise que je ne suis pas"):
+        with st.form("form_recherche_entreprise", clear_on_submit=False):
+            q = st.text_input("Nom ou ticker", key="entreprise_q",
+                              placeholder="ex : NVDA, Alibaba, ASML...")
+            btn = st.form_submit_button("Rechercher", use_container_width=True)
+        if btn and q.strip():
+            with st.spinner("Recherche..."):
+                st.session_state["entreprise_results"] = search_instruments(
+                    q.strip(), max_results=8,
+                    finnhub_key=config.secrets.finnhub_api_key)
+        res = st.session_state.get("entreprise_results")
+        if res:
+            opts = {libelle_resultat(r): r for r in res}
+            pick = st.selectbox("Resultat", list(opts), key="entreprise_pick")
+            if st.button("Afficher cette entreprise", use_container_width=True):
+                r = opts[pick]
+                hors = dict(st.session_state.get("entreprise_hors") or {})
+                hors[r["symbol"]] = r["nom"]
+                st.session_state["entreprise_hors"] = hors
+                st.session_state["entreprise_ticker"] = r["symbol"]
+                st.rerun()
+        elif res == []:
+            st.caption("Aucun resultat. Essaie un autre nom, ou le ticker exact (ex : NVDA).")
+    return choix
+
+
+def bloc_marche(choix: str) -> None:
+    """Cours, indicateurs, fondamentaux et avis d'analystes d'une valeur suivie.
+
+    Reserve aux valeurs de la watchlist : c'est la seule base qui alimente
+    l'historique de prix et les fondamentaux en local.
+    """
+    # --- Auto-recuperation : si les donnees de CET instrument ne sont pas du
+    # jour, on les recupere automatiquement (lui seul, pas toute la watchlist).
+    # Garde-fou : une seule tentative par instrument et par jour dans la session,
+    # pour ne pas re-interroger en boucle un ticker qui ne repond pas.
+    aujourd_hui = datetime.now().strftime("%Y-%m-%d")
+
+    def _quote_du_jour(t: str) -> bool:
+        q = db.get_quote(t)
+        if not q or not q.get("asof"):
+            return False
+        try:
+            d = datetime.fromisoformat(str(q["asof"]))
+            if d.tzinfo is not None:
+                d = d.astimezone()
+            return d.strftime("%Y-%m-%d") == aujourd_hui
+        except Exception:
+            return False
+
+    tentatives = st.session_state.setdefault("auto_maj_donnees", {})
+    if not _quote_du_jour(choix) and tentatives.get(choix) != aujourd_hui:
+        tentatives[choix] = aujourd_hui
+        with st.spinner(f"Cours de {choix} pas a jour : recuperation automatique..."):
+            cr_auto = update_donnees_instrument(config, choix)
+        if cr_auto.get("status") == "ok":
+            st.caption(f"✅ Cours de {choix} recuperes a l'instant.")
+        else:
+            st.warning(f"Impossible de recuperer les cours de {choix} "
+                       "(reseau/source ?). Reessaie via « Actualiser les cours ».")
+    q_sel = db.get_quote(choix)
+    if q_sel and q_sel.get("asof"):
+        st.caption(f"🕒 Cours de {choix} : maj {fmt_dt(q_sel['asof'])}.")
+
+    # --- Sous-partie 1 : cours ---
+    st.markdown("#### Son cours")
+    hist = db.get_price_history(choix)
+    if hist:
+        dfh = pd.DataFrame(hist)
+        dfh["date"] = pd.to_datetime(dfh["date"])
+        dfh = dfh.set_index("date")
+        # Decimation : quotidien sur ~6 mois recents, hebdomadaire au-dela.
+        # Visuellement identique mais ~2x moins de points rendus (page plus
+        # legere). Les INDICATEURS restent calcules sur l'historique complet.
+        close = dfh["close"]
+        if len(close) > 250:
+            recent = close.iloc[-126:]
+            ancien = close.iloc[:-126].resample("W-FRI").last().dropna()
+            close = pd.concat([ancien, recent])
+            close = close[~close.index.duplicated(keep="last")]
+        st.line_chart(close, height=300)
+
+        ind = indicateurs_ligne(choix)
+        bloc_metriques([
+            ("Dernier", _fmt(ind["last_close"])),
+            ("SMA 50", _fmt(ind["sma_50"])),
+            ("SMA 200", _fmt(ind["sma_200"])),
+            ("RSI 14", _fmt(ind["rsi_14"], dec=0)),
+            ("Plus-haut 52s", _fmt(ind["high_52w"])),
+        ])
+    else:
+        st.caption("Pas encore d'historique. Lance « Actualiser les cours » sur Aujourd'hui.")
+
+    # --- Sous-partie 2 : fondamentaux ---
+    st.markdown("#### Ses chiffres cles")
+    afficher_fondamentaux(choix)
+
+    # --- Sous-partie 3 : avis des analystes (actions uniquement) ---
+    type_choix = next((i.type for i in config.watchlist if i.ticker == choix), "action")
+    if type_choix.lower() == "action":
+        st.markdown("#### Ce qu'en disent les analystes")
+        afficher_avis_analystes(choix)
+
+
+def page_instrument():
+    titre_page("🔎", "Une entreprise",
+               "Cours, actualites, fondamentaux et analyse approfondie d'une valeur.")
+    choix = selecteur_entreprise()
+    if choix:
+        # Une entreprise trouvee par recherche n'est pas dans la watchlist : ses
+        # cours et fondamentaux ne sont pas en base, seule l'analyse fonctionne.
+        suivie = any(i.ticker == choix for i in config.watchlist)
+
+        bloc_marche(choix) if suivie else st.info(
+            f"{choix} n'est pas dans ta liste : ses cours, fondamentaux et "
+            "actualites ne sont donc pas suivis. L'analyse approfondie plus bas "
+            "fonctionne quand meme — c'est souvent comme ca qu'on decide "
+            "d'ajouter une valeur.")
+
+        # --- Ses actualites (etaient sur une page separee) ---
+        if suivie:
+            st.markdown("#### Ses actualites")
+            bloc_news_entreprise(choix)
+
+        # --- Analyse approfondie, a la demande ---
+        section_analyse(choix)
+    else:
+        st.warning("Aucune valeur suivie. Ajoute-en dans « Ma liste », "
+                   "ou cherche une entreprise ci-dessus.")
+
+
+# --------------------------------------------------------------------------
+# PAGE MA SYNTHESE : alertes (gratuites) + synthese redigee (a la demande)
 # --------------------------------------------------------------------------
 def page_briefing():
-    titre_page("🧠", "Briefing",
-               "Vue d'ensemble + analyse en 3 parties par instrument (Claude Sonnet).")
-    btn_synthese = st.button("🧠 Generer le briefing", use_container_width=True,
+    titre_page("🧠", "Ma synthese",
+               "La lecture d'ensemble de tes valeurs, ecrite pour toi.")
+    btn_synthese = st.button("🧠 Ecrire ma synthese", use_container_width=True,
                              disabled=not config.watchlist or not config.secrets.anthropic_api_key)
 
-    # Le briefing reprend le contenu des pages Donnees et News : on verifie leur fraicheur.
+    # La synthese reprend cours et actualites : on verifie leur fraicheur.
     donnees_fraiches, asof_donnees = fraicheur("donnees")
     news_fraiches, asof_news = fraicheur("news")
 
@@ -691,8 +797,8 @@ def page_briefing():
         return f"**{fmt_dt(asof) if asof else 'jamais'}**" + ("" if frais else " ⚠️")
 
     st.caption(
-        f"🕒 Donnees : {_tag_fraicheur(donnees_fraiches, asof_donnees)} · "
-        f"News : {_tag_fraicheur(news_fraiches, asof_news)} "
+        f"🕒 Cours : {_tag_fraicheur(donnees_fraiches, asof_donnees)} · "
+        f"Actualites : {_tag_fraicheur(news_fraiches, asof_news)} "
         f"(⚠️ = plus vieux que {FRAICHEUR_MAX_H} h)."
     )
 
@@ -788,16 +894,16 @@ def page_briefing():
     # rafraichit ce qui manque PUIS genere, sans quitter la page.
     if (not (donnees_fraiches and news_fraiches)
             and config.watchlist and config.secrets.anthropic_api_key):
-        manquants = ([] if donnees_fraiches else ["Donnees"]) + ([] if news_fraiches else ["News"])
+        manquants = ([] if donnees_fraiches else ["cours"]) + ([] if news_fraiches else ["actualites"])
         if btn_synthese:
             st.warning(
                 f"🌿 **{' et '.join(manquants)}** trop anciennes (rien de recupere, ou plus "
                 f"vieux que {FRAICHEUR_MAX_H} h). Utilise le bouton ci-dessous pour tout faire "
-                "en un clic, ou rafraichis la page concernee puis reclique « Generer »."
+                "en un clic, ou lance l'actualisation depuis Aujourd'hui."
             )
             log("[UI] 'Generer le briefing' : donnees/news pas fraiches "
                 f"(donnees={donnees_fraiches}, news={news_fraiches})", "warning")
-        if st.button(f"🔄 Rafraichir {' + '.join(manquants)} puis generer le briefing",
+        if st.button(f"🔄 Actualiser {' + '.join(manquants)} puis ecrire ma synthese",
                      key="refresh_then_brief", use_container_width=True):
             if not donnees_fraiches:
                 run_update(update_donnees, "Mise a jour des donnees")
@@ -873,7 +979,7 @@ def page_briefing():
     # =====================================================================
     # SECTION PAR INSTRUMENT
     # =====================================================================
-    st.markdown("## 📋 Par instrument")
+    st.markdown("## 📋 Valeur par valeur")
     snaps_by = {s.instrument.ticker: s for s in signals.construire_snapshots(config)}
     evby = {e["ticker"]: e for e in data.get("evenements", [])}
     synth_inst = st.session_state.get("synth_instruments") or {}
@@ -1013,7 +1119,7 @@ def _rendre_etape_chiffres(etape: dict, date_exo: str = "", date_maj: str = "") 
     date_txt = date_maj if etape.get("id") == "valorisation" else date_exo
     lignes = []
     for ligne in etape["lignes"]:
-        valeur = f"🚬 {ligne['valeur']}" if ligne.get("doute") else ligne["valeur"]
+        valeur = f"⚠️ {ligne['valeur']}" if ligne.get("doute") else ligne["valeur"]
         src = "yfinance" if ligne["source"] == "yfinance" else "calculé"
         src_html = glossaire.formule_abbr(ligne["label"], src)  # tooltip formule si calculé
         if date_txt:
@@ -1028,7 +1134,7 @@ def _rendre_etape_chiffres(etape: dict, date_exo: str = "", date_maj: str = "") 
     st.markdown("<table style='width:100%;border-collapse:collapse'>"
                 + "".join(lignes) + "</table>", unsafe_allow_html=True)
     if etape.get("note"):  # mise en garde propre a l'etape (ex : societe financiere)
-        st.caption(f"🚬 {etape['note']}")
+        st.caption(f"⚠️ {etape['note']}")
 
 
 def _entete_diag(diag: dict) -> None:
@@ -1106,127 +1212,90 @@ def _sauver_diag(diag: dict, conclusions: dict, resume: str,
         log(f"[UI] sauvegarde diagnostic impossible: {type(e).__name__}: {e}", "error")
 
 
-def page_diagnostic():
-    titre_page("🔬", "VN Diagnostic",
-               "Analyse financiere complete d'une action (Claude Opus 4.8), conservee en base.")
+def section_analyse(ticker: str) -> None:
+    """Analyse financiere approfondie d'UNE entreprise, a la demande.
+
+    Etait une page a part ("VN Diagnostic"), avec sa propre recherche et sa
+    propre liste de diagnostics conserves. Elle vit desormais au bas de la fiche
+    de l'entreprise : on choisit une entreprise une seule fois, et l'analyse
+    deja produite se rouvre toute seule, sans nouvel appel paye.
+    """
+    st.divider()
+    st.markdown("#### 🔬 Analyse approfondie")
+
+    stocke = _diag_depuis_ligne(db.get_diagnostic(ticker))
     if not config.secrets.anthropic_api_key:
-        st.info("ANTHROPIC_API_KEY absente : le diagnostic necessite Claude Opus 4.8.")
+        st.info("Cle Claude absente : l'analyse approfondie n'est pas disponible.")
+        if stocke:
+            _rendre_diag_statique(stocke)
+        return
 
-    # --- Reprise apres coupure : si la session est vide (nouvel appareil, onglet
-    # recharge, connexion perdue puis revenue), on remonte le dernier diagnostic
-    # ecrit en base. Aucun appel Claude.
-    if not st.session_state.get("diag_result"):
-        repris = _diag_depuis_ligne(db.dernier_diagnostic())
-        if repris:
-            st.session_state["diag_result"] = repris
-
-    # --- Diagnostics conserves : rechargement instantane et gratuit. ---
-    conserves = db.list_diagnostics()
-    if conserves:
-        courant = ((st.session_state.get("diag_result") or {}).get("diag") or {}).get("ticker")
-        libelles = {
-            f"{d['ticker']} — {d.get('nom') or d['ticker']} · {fmt_dt(d['generated_at'])}"
-            + (" ⚠️ incomplet" if d.get("statut") == "partiel" else ""): d["ticker"]
-            for d in conserves
-        }
-        cles = list(libelles)
-        idx = next((i for i, k in enumerate(cles) if libelles[k] == courant), 0)
-        cc1, cc2 = st.columns([4, 1])
-        choix_conserve = cc1.selectbox(f"💾 {len(conserves)} diagnostic(s) conserve(s)",
-                                       cles, index=idx, key="diag_conserves")
-        if cc2.button("🗑️ Oublier", use_container_width=True,
-                      help="Supprime ce diagnostic de la base"):
-            db.supprimer_diagnostic(libelles[choix_conserve])
-            st.session_state["diag_result"] = None
-            # Le libelle memorise par le selectbox n'existe plus dans les options.
-            st.session_state.pop("diag_conserves", None)
+    if stocke:
+        c1, c2 = st.columns([3, 1])
+        relancer = c1.button("🔄 Refaire l'analyse", use_container_width=True,
+                             help="Reprend les comptes les plus recents. Compte une minute.")
+        if c2.button("🗑️ Oublier", use_container_width=True,
+                     help="Supprime l'analyse conservee pour cette entreprise"):
+            db.supprimer_diagnostic(ticker)
             st.rerun()
-        if libelles[choix_conserve] != courant:
-            st.session_state["diag_result"] = _diag_depuis_ligne(
-                db.get_diagnostic(libelles[choix_conserve]))
-            st.rerun()
+        lancer = relancer
+    else:
+        st.caption("Sept etapes — marges, rentabilite, creation de valeur, solidite, "
+                   "cash, croissance, valorisation — puis une conclusion ecrite. "
+                   "Compte environ une minute.")
+        lancer = st.button("🔬 Analyser cette entreprise", use_container_width=True,
+                           type="primary")
 
-    # Etape 1 : recherche (le formulaire => Entree declenche la recherche).
-    with st.form("form_diag", clear_on_submit=False):
-        q_diag = st.text_input("Analyser une (autre) entreprise", key="diag_q",
-                               placeholder="ex : NVDA, Alibaba, ASML...")
-        rechercher = st.form_submit_button("🔎 Rechercher", use_container_width=True)
-    if rechercher and q_diag.strip():
-        with st.spinner("Recherche (Yahoo)..."):
-            st.session_state["diag_results"] = search_instruments(
-                q_diag.strip(), max_results=8,
-                finnhub_key=config.secrets.finnhub_api_key)
+    if lancer:
+        _lancer_analyse(ticker)
+    elif stocke:
+        _rendre_diag_statique(stocke)
 
-    # Etape 2 : selection + bouton Analyser.
-    analyser, ticker_sel = False, None
-    results = st.session_state.get("diag_results")
-    if results:
-        opts = {libelle_resultat(r): r["symbol"] for r in results}
-        pick = st.selectbox("Selectionne l'entreprise a analyser", list(opts.keys()), key="diag_pick")
-        ticker_sel = opts.get(pick)
-        # Deja analysee ? On le dit AVANT de relancer un appel Opus (le plus cher).
-        deja = db.get_diagnostic(ticker_sel) if ticker_sel else None
-        if deja:
-            st.caption(f"ℹ️ {ticker_sel} a deja ete analyse le **{fmt_dt(deja['generated_at'])}** "
-                       "(disponible dans la liste ci-dessus, sans nouvel appel Claude).")
-        analyser = st.button("🔬 Analyser" + (" a nouveau" if deja else ""),
-                             use_container_width=True, type="primary",
-                             disabled=not config.secrets.anthropic_api_key or not ticker_sel)
-    elif results == []:
-        st.caption("Aucun resultat. Essaie un autre nom, ou le ticker exact (ex : NVDA).")
 
-    # Etape 3 : analyse (affichage progressif) ou rendu du dernier diagnostic.
-    if analyser and ticker_sel:
-        with st.spinner("Recuperation des etats financiers..."):
-            diag = construire_diagnostic(config, ticker_sel)
-        if "erreur" in diag:
-            st.error(diag["erreur"])
-        else:
-            genere_le = datetime.now(timezone.utc).isoformat(timespec="seconds")
-            _entete_diag(diag)
-            summary_ph = st.empty()  # exec summary EN HAUT, rempli a la fin
-            summary_ph.info("Executive summary : genere apres les etapes ci-dessous...")
-            st.divider()
-            conclusions = {}
-            d_exo = _fmt_date_iso(diag.get("date_reference"))
-            d_maj = _fmt_date_iso(diag.get("date_recuperation"))
-            # Les chiffres seuls valent deja d'etre conserves : on ecrit avant meme
-            # la 1re conclusion, puis apres chaque etape (resilience reseau).
-            _sauver_diag(diag, conclusions, "", genere_le, "partiel")
-            for etape in diag["etapes"]:
-                _rendre_etape_chiffres(etape, d_exo, d_maj)
-                st.caption("🤖 Conclusion — LLM · Claude Opus 4.8")
-                conclusions[etape["id"]] = st.write_stream(
-                    llm.conclusion_etape_stream(config.secrets, etape["titre"],
-                                                etape["lignes"], etape.get("note", ""))
-                )
-                _sauver_diag(diag, conclusions, "", genere_le, "partiel")
-            with summary_ph.container():
-                st.markdown("### Executive summary")
-                st.caption("🤖 LLM · Claude Opus 4.8")
-                resume = st.write_stream(
-                    llm.exec_summary_diagnostic_stream(config.secrets, diag, conclusions)
-                )
-            # Opus termine par une ligne « RECO: ACHAT ». On la detache une fois le
-            # flux fini, puis on re-rend le bloc avec le badge EN TETE : pendant le
-            # streaming l'utilisateur lit l'analyse, pas un marqueur technique.
-            reco_diag, resume = llm.extraire_reco_resume(resume)
-            if reco_diag:
-                with summary_ph.container():
-                    st.markdown("### Executive summary")
-                    st.caption("🤖 LLM · Claude Opus 4.8")
-                    afficher_badge_reco(reco_diag)
-                    st.markdown(resume)
-            _sauver_diag(diag, conclusions, resume, genere_le, "complet", reco_diag)
-            st.session_state["diag_result"] = {
-                "diag": diag, "conclusions": conclusions, "resume": resume,
-                "reco": reco_diag, "generated_at": genere_le, "statut": "complet",
-            }
-            # Le libelle de ce ticker dans la liste des conserves porte l'ancienne
-            # date : on oublie la selection memorisee pour eviter un decalage.
-            st.session_state.pop("diag_conserves", None)
-    elif st.session_state.get("diag_result"):
-        _rendre_diag_statique(st.session_state["diag_result"])
+def _lancer_analyse(ticker: str) -> None:
+    """Genere l'analyse etape par etape, en ecrivant en base au fur et a mesure."""
+    with st.spinner("Recuperation des comptes..."):
+        diag = construire_diagnostic(config, ticker)
+    if "erreur" in diag:
+        st.error(diag["erreur"])
+        return
+
+    genere_le = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    _entete_diag(diag)
+    summary_ph = st.empty()  # conclusion generale EN HAUT, remplie a la fin
+    summary_ph.info("Conclusion generale : ecrite apres les etapes ci-dessous...")
+    st.divider()
+    conclusions = {}
+    d_exo = _fmt_date_iso(diag.get("date_reference"))
+    d_maj = _fmt_date_iso(diag.get("date_recuperation"))
+    # Les chiffres seuls valent deja d'etre conserves : on ecrit avant meme la
+    # 1re conclusion, puis apres chaque etape (resilience reseau).
+    _sauver_diag(diag, conclusions, "", genere_le, "partiel")
+    for etape in diag["etapes"]:
+        _rendre_etape_chiffres(etape, d_exo, d_maj)
+        st.caption("🤖 Conclusion ecrite par Claude")
+        conclusions[etape["id"]] = st.write_stream(
+            llm.conclusion_etape_stream(config.secrets, etape["titre"],
+                                        etape["lignes"], etape.get("note", ""))
+        )
+        _sauver_diag(diag, conclusions, "", genere_le, "partiel")
+    with summary_ph.container():
+        st.markdown("### Conclusion generale")
+        st.caption("🤖 Ecrite par Claude")
+        resume = st.write_stream(
+            llm.exec_summary_diagnostic_stream(config.secrets, diag, conclusions)
+        )
+    # Claude termine par une ligne « RECO: ACHAT ». On la detache une fois le flux
+    # fini, puis on re-rend le bloc avec le badge EN TETE : pendant le streaming
+    # l'utilisateur lit l'analyse, pas un marqueur technique.
+    reco_diag, resume = llm.extraire_reco_resume(resume)
+    if reco_diag:
+        with summary_ph.container():
+            st.markdown("### Conclusion generale")
+            st.caption("🤖 Ecrite par Claude")
+            afficher_badge_reco(reco_diag)
+            st.markdown(resume)
+    _sauver_diag(diag, conclusions, resume, genere_le, "complet", reco_diag)
 
 
 # --------------------------------------------------------------------------
@@ -1372,8 +1441,8 @@ def _section_suggestions():
 # du meme geste — les separer obligeait a naviguer entre deux pages pour un ajout.
 # --------------------------------------------------------------------------
 def page_watchlist():
-    titre_page("✏️", "Watchlist",
-               "Ajouter, retirer et re-theminer les instruments suivis.")
+    titre_page("✏️", "Ma liste",
+               "Les valeurs que tu suis : en ajouter, en retirer, les reclasser.")
     try:
         mtime = CONFIG_PATH.stat().st_mtime if CONFIG_PATH.exists() else None
     except OSError:
@@ -1482,10 +1551,10 @@ def page_watchlist():
     if _flash:
         st.success(f"✅ {_flash}")
 
-    st.markdown(f"##### 📋 Watchlist actuelle — {len(config.watchlist)} instrument(s)")
+    st.markdown(f"##### 📋 Ma liste actuelle — {len(config.watchlist)} instrument(s)")
 
     if not config.watchlist:
-        st.info("Watchlist vide. Utilise la recherche ci-dessus ou « Ajouter "
+        st.info("Liste vide. Utilise la recherche ci-dessus ou « Ajouter "
                 "manuellement » pour ajouter ton premier instrument.")
     else:
         st.caption("Modifie le **theme** de chaque ligne puis clique 💾 en bas. "
@@ -1602,90 +1671,69 @@ def page_about():
             "generations Claude en ont besoin."
         )
 
-    with st.expander("📄 Les pages, une par une"):
+    with st.expander("📄 Les quatre pages"):
         st.markdown(
-            "**📈 Donnees** — Vue d'ensemble de la watchlist : tableau des cours et "
-            "signaux (Actions / ETF), calendrier des resultats et estimations. Chaque "
-            "section est **pliable** : replie ce que tu ne lis pas, l'etat est conserve "
-            "pendant la session. **Aucun appel Claude.**\n\n"
-            "**🔎 Par instrument** — Le detail d'**un seul** instrument : graphique de "
-            "cours, indicateurs, fondamentaux et avis d'analystes. Si ses donnees ne sont "
-            "pas du jour, elles sont recuperees automatiquement (une seule tentative par "
-            "jour). **Aucun appel Claude.**\n\n"
-            "**📰 News** — Recupere les news puis les fait **classer et traduire par "
-            "Claude Haiku** (categorie + tonalite 🟢/⚪/🔴). Sans cle Claude, les news "
-            "s'affichent en clair, non classees.\n\n"
-            "**🧠 Briefing** — Vue d'ensemble + une section par instrument en 3 parties "
-            "(analyse des chiffres, analyse des news, conclusion) + une **recommandation** "
-            "ACHAT / GARDER / VENDRE. "
-            "**Un seul appel Claude Sonnet** pour tout. Le briefing exige des donnees et "
-            "des news de moins de "
-            f"{FRAICHEUR_MAX_H} h ; si elles sont perimees, un bouton unique rafraichit "
-            "ce qui manque puis genere. Si rien n'a change depuis la derniere fois, le "
-            "texte est repris du cache sans nouvel appel.\n\n"
-            "**🔬 VN Diagnostic** — Analyse financiere complete d'une **action** en plusieurs "
-            "etapes (rentabilite, structure financiere, creation de valeur, valorisation). "
-            "Les chiffres viennent du code, **Claude Opus 4.8** redige une conclusion par "
-            "etape, un executive summary et une **recommandation** (meme code que le "
-            "Briefing). C'est l'appel "
-            "le plus cher : les diagnostics sont conserves et rechargeables gratuitement. "
-            "« VN » renvoie a **Veronique Nguyen**, dont la methode d'analyse financiere "
-            "inspire le deroule en etapes.\n\n"
-            "**✏️ Watchlist** — Tout ce qui touche a la liste suivie, au meme endroit :\n"
-            "- **Rechercher et ajouter** un instrument par son nom (pas besoin de "
-            "connaitre le ticker). Le theme est detecte automatiquement a l'ajout "
-            "(secteur / pays) et reste modifiable.\n"
-            "- **Editer la liste** : nom, type, theme. Les modifications ne sont ecrites "
-            "qu'au clic sur 💾 ; le retrait 🗑️ est immediat.\n"
-            "- **💡 Suggestions d'ajout** (ex-page « Idees ») : candidats issus des "
-            "entreprises comparables (pairs Finnhub, deterministe) et de suggestions "
-            "thematiques (Claude Sonnet) pour combler des trous de diversification. "
-            "Chaque candidat est verifie et chiffre par le code avant affichage, puis "
-            "s'ajoute a la liste en un clic."
+            "**📈 Aujourd'hui** — Ce qui a bouge sur tes valeurs : cours et signaux, "
+            "echeances a venir, puis le fil des actualites recentes. C'est la page "
+            "d'accueil parce que c'est la question qu'on se pose en ouvrant l'app.\n\n"
+            "**✏️ Ma liste** — Les valeurs que tu suis : ajouter, retirer, "
+            "re-thematiser, et les suggestions d'ajout. C'est par la qu'on commence.\n\n"
+            "**🔎 Une entreprise** — La fiche complete d'UNE valeur : son cours, ses "
+            "actualites, ses chiffres cles, l'avis des analystes, et l'analyse "
+            "approfondie a la demande. Tu peux aussi y chercher une entreprise que tu "
+            "ne suis pas encore, pour l'analyser avant de decider de l'ajouter.\n\n"
+            "**🧠 Ma synthese** — La lecture d'ensemble de tes valeurs, ecrite par "
+            "Claude, avec une recommandation par valeur.\n\n"
+            "_L'analyse approfondie suit le deroule en etapes de la methode "
+            "d'analyse financiere de **Veronique Nguyen**._"
         )
 
     with st.expander("🎨 Codes couleur et symboles"):
         st.markdown(
-            "**Recommandation (Claude)** — le mot est toujours ecrit en toutes lettres, "
+            "**Recommandation** — le mot est toujours ecrit en toutes lettres, "
             "la couleur ne fait que le renforcer :\n"
             "- **ACHAT** (vert) — le dossier parait attractif au niveau actuel\n"
             "- **GARDER** (orange) — rien qui justifie d'agir\n"
             "- **VENDRE** (rouge) — signaux de degradation\n\n"
-            "C'est une lecture des chiffres et des news, **pas un ordre** : elle "
+            "C'est une lecture des chiffres et des actualites, **pas un ordre** : elle "
             "s'accompagne toujours des arguments qui l'ont produite, a lire avant de "
             "decider quoi que ce soit.\n\n"
-            "**Flags (deterministes, calcules par le code)** :\n"
+            "**Alertes (calculees par le code, sans IA)** :\n"
             "- **Alerte** (bandeau rouge) — chute brutale, degradation, signal "
             "technique fort\n"
             "- **Info** (bandeau orange) — a noter, sans urgence\n"
-            "- 🆕 — flag apparu lors de la **derniere** mise a jour des donnees ; sans le "
-            "badge, il est persistant (deja signale, avec sa date de premiere apparition)\n\n"
-            "**News** : 🟢 positif · ⚪ neutre · 🔴 negatif.\n\n"
-            "**VN Diagnostic** : 🚬 signale un chiffre douteux — aberration comptable, ou "
-            "ratio fausse par un ecart de devise entre les comptes et la cotation.\n\n"
+            "- 🆕 — alerte apparue lors de la **derniere** actualisation ; sans le "
+            "badge, elle est persistante (deja signalee, avec sa date d'apparition)\n\n"
+            "**Actualites** : 🟢 positif · ⚪ neutre · 🔴 negatif.\n\n"
+            "**Analyse approfondie** : ⚠️ signale un chiffre a verifier — aberration "
+            "comptable, ratio fausse par un ecart de devise, ou ratio peu pertinent "
+            "pour une societe financiere.\n\n"
             "**Fraicheur** : ⚠️ a cote d'une date = plus vieux que "
             f"{FRAICHEUR_MAX_H} heures."
         )
 
-    with st.expander("💸 Modeles Claude et cout de chaque bouton"):
+    with st.expander("💸 Ce que coute chaque bouton"):
         st.markdown(
-            "| Bouton | Modele | Ordre de grandeur |\n|---|---|---|\n"
-            "| Mettre a jour les donnees | *aucun* | gratuit |\n"
-            "| Mettre a jour les news | Claude Haiku | tres faible |\n"
-            "| Generer le briefing | Claude Sonnet | 1 appel pour toute la watchlist |\n"
-            "| Generer des suggestions | Claude Sonnet | 1 appel (si thematiques activees) |\n"
-            "| Analyser (VN Diagnostic) | Claude Opus 4.8 | le plus cher : 1 appel par "
-            "etape + 1 resume |\n"
-            "| Tout mettre a jour | Haiku (news) | donnees + news, **pas** le briefing |\n\n"
-            "Deux garde-fous evitent de payer deux fois : le briefing est repris du cache "
-            "si les donnees et les news n'ont pas bouge, et la page VN Diagnostic previent "
-            "qu'une entreprise a deja ete analysee avant de relancer Opus."
+            "L'app appelle Claude sur certains boutons seulement. Ordre de grandeur :\n\n"
+            "| Bouton | Duree | Cout |\n|---|---|---|\n"
+            "| Actualiser les cours | quelques secondes | gratuit |\n"
+            "| Actualiser les actualites | quelques secondes | tres faible |\n"
+            "| Ecrire ma synthese | ~30 s | 1 appel pour toute la liste |\n"
+            "| Generer des suggestions | ~20 s | 1 appel |\n"
+            "| Analyser cette entreprise | ~1 min | le plus cher : 1 appel par etape |\n"
+            "| Tout mettre a jour | quelques secondes | cours + actualites, **pas** la "
+            "synthese |\n\n"
+            "Deux garde-fous evitent de payer deux fois : la synthese est reprise du "
+            "cache si rien n'a bouge, et une analyse deja produite se rouvre "
+            "gratuitement au lieu d'etre refaite.\n\n"
+            "_Sous le capot : Haiku pour les actualites, Sonnet pour la synthese et les "
+            "suggestions, Opus pour l'analyse approfondie._"
         )
 
     with st.expander("🔌 Sources de donnees & stockage"):
         cles = [
             ("Claude (ANTHROPIC_API_KEY)", bool(config.secrets.anthropic_api_key),
-             "News classees, briefing, suggestions thematiques, VN Diagnostic"),
+             "Classement des actualites, synthese, suggestions, analyse approfondie"),
             ("Finnhub (FINNHUB_API_KEY)", bool(config.secrets.finnhub_api_key),
              "News de repli, entreprises comparables (pairs)"),
         ]
@@ -1731,17 +1779,76 @@ def page_about():
 # legere sur mobile), le menu se replie derriere le burger ☰, et l'URL porte la
 # page courante — une reconnexion revient donc pile ou on etait, alors que les
 # onglets repartaient toujours du premier.
+def ecran_demarrage() -> None:
+    """Premier ecran quand aucune valeur n'est suivie.
+
+    Une liste vide produisait un tableau vide et des boutons grises sur toutes
+    les pages : on montrait une machine a l'arret. On montre desormais la seule
+    chose a faire, et le menu n'apparait qu'une fois la liste garnie.
+    """
+    st.markdown("## 📊 Bienvenue sur Sam_Invest")
+    st.markdown(
+        "Suis quelques entreprises, et l'app te donnera leurs cours, leurs "
+        "actualites et une analyse de leurs comptes.\n\n"
+        "**Ajoute trois entreprises que tu connais pour commencer.**"
+    )
+    with st.form("form_demarrage", clear_on_submit=False):
+        q = st.text_input("Nom ou ticker", key="demarrage_q",
+                          placeholder="ex : Air Liquide, Nvidia, ASML...",
+                          label_visibility="collapsed")
+        lance = st.form_submit_button("🔎 Chercher", use_container_width=True,
+                                      type="primary")
+    st.caption("Des idees : Air Liquide · Nvidia · LVMH · ASML · Microsoft")
+
+    if lance and q.strip():
+        with st.spinner("Recherche..."):
+            st.session_state["demarrage_results"] = search_instruments(
+                q.strip(), finnhub_key=config.secrets.finnhub_api_key)
+
+    res = st.session_state.get("demarrage_results")
+    if res:
+        labels = {libelle_resultat(r): r for r in res}
+        choix = st.multiselect("Coche ce que tu veux suivre :", list(labels))
+        if st.button("➕ Ajouter et commencer", disabled=not choix,
+                     use_container_width=True, type="primary"):
+            rows = []
+            with st.spinner("Ajout en cours..."):
+                for lab in choix:
+                    r = labels[lab]
+                    rows.append({"ticker": r["symbol"], "nom": r["nom"],
+                                 "type": r["type"],
+                                 "theme": suggest_theme(r["symbol"], r["type"])})
+            save_watchlist(rows)
+            st.session_state["demarrage_results"] = None
+            st.rerun()
+    elif res == []:
+        st.caption("Aucun resultat. Essaie un autre nom, ou le ticker exact (ex : NVDA).")
+
+    if config.warnings:
+        with st.expander("⚠️ Configuration"):
+            for w in config.warnings:
+                st.warning(w)
+
+
+# Liste vide : on court-circuite toute la navigation. Rien d'autre n'a de sens
+# tant qu'aucune valeur n'est suivie.
+if not config.watchlist:
+    ecran_demarrage()
+    st.stop()
+
+
+# Chaque page est nommee par la QUESTION a laquelle elle repond, et l'ordre suit
+# celui dans lequel on s'en sert : quoi de neuf, ce que je suis, une valeur en
+# particulier, la lecture d'ensemble.
 PAGES = [
     # Page par defaut : Streamlit la sert a la racine « / » (son url_path n'est pas
     # utilise dans les liens). C'est elle qu'on retrouve apres une reconnexion sans
     # chemin explicite.
-    st.Page(page_donnees, title="Donnees", icon="📈", url_path="donnees", default=True),
-    st.Page(page_instrument, title="Par instrument", icon="🔎", url_path="instrument"),
-    st.Page(page_news, title="News", icon="📰", url_path="news"),
-    st.Page(page_briefing, title="Briefing", icon="🧠", url_path="briefing"),
-    st.Page(page_diagnostic, title="VN Diagnostic", icon="🔬", url_path="vn-diagnostic"),
-    st.Page(page_watchlist, title="Watchlist", icon="✏️", url_path="watchlist"),
-    st.Page(page_about, title="A propos", icon="ℹ️", url_path="a-propos"),
+    st.Page(page_donnees, title="Aujourd'hui", icon="📈", url_path="aujourdhui", default=True),
+    st.Page(page_watchlist, title="Ma liste", icon="✏️", url_path="ma-liste"),
+    st.Page(page_instrument, title="Une entreprise", icon="🔎", url_path="entreprise"),
+    st.Page(page_briefing, title="Ma synthese", icon="🧠", url_path="synthese"),
+    st.Page(page_about, title="Aide", icon="ℹ️", url_path="aide"),
 ]
 navigation = st.navigation(PAGES, position="sidebar")
 
@@ -1749,11 +1856,11 @@ navigation = st.navigation(PAGES, position="sidebar")
 # a occuper le haut de chaque page.
 with st.sidebar:
     st.markdown("## 📊 Sam_Invest")
-    st.caption("Watchlist & signaux")
+    st.caption("Mes valeurs, suivies au jour le jour")
     st.divider()
     btn_global = st.button(
         "🔄 Tout mettre a jour", use_container_width=True, disabled=not config.watchlist,
-        help="Donnees + News. Ne genere PAS la synthese Sonnet (cout maitrise).",
+        help="Cours + actualites. N'ecrit PAS la synthese (le bouton le plus cher).",
     )
     # Emplacement reserve pour l'export : rempli en fin de script (voir plus bas)
     # afin d'inclure le briefing et le diagnostic generes durant ce rerun.
@@ -1761,8 +1868,8 @@ with st.sidebar:
     _f_don, _a_don = fraicheur("donnees")
     _f_new, _a_new = fraicheur("news")
     st.caption(
-        f"🕒 Donnees : {fmt_dt(_a_don) if _a_don else 'jamais'}{'' if _f_don else ' ⚠️'}  \n"
-        f"🕒 News : {fmt_dt(_a_new) if _a_new else 'jamais'}{'' if _f_new else ' ⚠️'}"
+        f"🕒 Cours : {fmt_dt(_a_don) if _a_don else 'jamais'}{'' if _f_don else ' ⚠️'}  \n"
+        f"🕒 Actualites : {fmt_dt(_a_new) if _a_new else 'jamais'}{'' if _f_new else ' ⚠️'}"
     )
     if config.warnings:
         with st.expander("⚠️ Configuration", expanded=not config.watchlist):
@@ -1795,7 +1902,7 @@ try:
                 _synth_i = json.loads(_bc.get("instruments") or "{}")
             except Exception:
                 _synth_i = {}
-    _diag_res = st.session_state.get("diag_result") or _diag_depuis_ligne(db.dernier_diagnostic())
+    _diag_res = _diag_depuis_ligne(db.dernier_diagnostic())
     _md_export = construire_export_md(
         config,
         synth_global=_synth_g,
@@ -1810,7 +1917,7 @@ try:
         mime="text/markdown",
         use_container_width=True,
         disabled=not config.watchlist,
-        help="Exporte toutes les donnees (Donnees, News, Briefing, VN Diagnostic, "
+        help="Exporte tout (cours, actualites, synthese, analyse approfondie, "
              "Suggestions) en un "
              "Markdown unique, pret a coller a Claude pour analyse.",
     )
