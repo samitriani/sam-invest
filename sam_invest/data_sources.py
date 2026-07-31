@@ -367,15 +367,56 @@ def _map_quote_type(qt: str | None) -> str | None:
     return None
 
 
-def _norm_result(symbol, nom, bourse, qtype) -> dict | None:
+# --- Classement des places de cotation ------------------------------------
+# Une meme societe est relayee sur des dizaines de places. Seule la cotation
+# PRINCIPALE porte les donnees exploitables cote Yahoo (marketCap, beta,
+# financialCurrency) : sur un relais, `.info` est quasi vide et le diagnostic
+# sort avec WACC / PER / PBR a "n/d". Cas vecu : "Peugeot" -> FFP.MU (Munich),
+# ou Yahoo renvoie les 7 relais avec un score identique (aucun signal de tri)
+# et omet purement et simplement PEUG.PA.
+#
+# Liste NOIRE volontairement : une place inconnue est presumee principale, pour
+# ne jamais enterrer une cotation legitime qu'on n'aurait pas prevue.
+_BOURSES_RELAIS = {  # Boersen regionales allemandes : relais d'actions etrangeres
+    "MUN", "FRA", "DUS", "STU", "BER", "HAM", "HAN",
+}
+_BOURSES_MARGINALES = {  # MTF, gre a gre, orderbook international
+    "DXE", "CXE", "IOB", "PNK", "OQX", "OQB", "OID", "TLO",
+}
+
+
+def _rang_bourse(code: str) -> int:
+    """0 = cotation principale presumee, 1 = relais regional, 2 = MTF / OTC."""
+    c = (code or "").upper()
+    if c in _BOURSES_MARGINALES:
+        return 2
+    if c in _BOURSES_RELAIS:
+        return 1
+    return 0
+
+
+def _norm_result(symbol, nom, bourse, qtype, code_bourse="", score=0.0) -> dict | None:
     t = _map_quote_type(qtype)
     if not t or not symbol:
         return None
-    return {"symbol": symbol, "nom": nom or symbol, "bourse": bourse or "", "type": t}
+    return {
+        "symbol": symbol,
+        "nom": nom or symbol,
+        "bourse": bourse or "",
+        "type": t,
+        "rang": _rang_bourse(code_bourse or bourse),
+        "score": _safe_float(score) or 0.0,
+    }
 
 
-def search_instruments(query: str, max_results: int = 8) -> list[dict]:
-    """Cherche des instruments par nom ou ticker. Renvoie [{symbol, nom, bourse, type}].
+def search_instruments(query: str, max_results: int = 8,
+                       finnhub_key: str = "") -> list[dict]:
+    """Cherche des instruments par nom ou ticker.
+
+    Renvoie [{symbol, nom, bourse, type, rang, score}] trie cotation principale
+    d'abord (voir _rang_bourse). Si AUCUN resultat n'est une cotation principale,
+    on complete via Finnhub, qui expose le ticker principal la ou Yahoo ne
+    renvoie que des relais ("Peugeot" -> PEUG.PA).
 
     yfinance.Search en primaire, endpoint Yahoo brut en repli. Filtre actions/ETF.
     Ne plante jamais : renvoie [] en cas d'echec.
@@ -383,10 +424,44 @@ def search_instruments(query: str, max_results: int = 8) -> list[dict]:
     query = (query or "").strip()
     if not query:
         return []
-    out = _search_yfinance(query, max_results)
-    if out:
-        return out
-    return _search_yahoo_endpoint(query, max_results)
+    out = _search_yfinance(query, max_results) or _search_yahoo_endpoint(query, max_results)
+
+    # Completion : Yahoo n'a propose que des relais -> demander le ticker
+    # principal a Finnhub, puis le renormaliser via Yahoo (socle de l'app).
+    if finnhub_key and not any(r["rang"] == 0 for r in out):
+        connus = {r["symbol"].upper() for r in out}
+        for extra in _cotations_principales_finnhub(query, finnhub_key):
+            if extra["symbol"].upper() not in connus:
+                out.append(extra)
+                connus.add(extra["symbol"].upper())
+
+    # Tri stable : cotation principale d'abord, puis pertinence Yahoo.
+    out.sort(key=lambda r: (r["rang"], -r["score"]))
+    return out[:max_results]
+
+
+def _cotations_principales_finnhub(query: str, key: str, max_symboles: int = 3) -> list[dict]:
+    """Tickers principaux vus par Finnhub, renormalises via Yahoo. [] si echec."""
+    try:
+        r = requests.get(
+            f"{FINNHUB_BASE}/search",
+            params={"q": query, "token": key}, timeout=HTTP_TIMEOUT,
+        )
+        if not r.ok:
+            return []
+        symboles = [str(x.get("symbol") or "").strip()
+                    for x in (r.json() or {}).get("result", [])]
+    except Exception:
+        return []
+
+    out = []
+    for sym in [s for s in symboles if s][:max_symboles]:
+        # Une fiche Yahoo par symbole : confirme que yfinance connait le ticker
+        # et fournit la place + le type d'instrument pour l'affichage.
+        for fiche in _search_yahoo_endpoint(sym, 1):
+            if fiche["symbol"].upper() == sym.upper():
+                out.append(fiche)
+    return out
 
 
 # --- Suggestion automatique d'etiquette "theme" a partir des donnees Yahoo ---
@@ -464,15 +539,16 @@ def _search_yfinance(query: str, max_results: int) -> list[dict]:
     try:
         s = yf.Search(query, max_results=max_results * 2)
         out = []
+        # Pas de troncature ici : search_instruments coupe APRES le classement,
+        # sinon une cotation principale mal placee par Yahoo serait perdue.
         for r in (getattr(s, "quotes", None) or []):
             row = _norm_result(r.get("symbol"),
                                r.get("shortname") or r.get("longname"),
                                r.get("exchDisp") or r.get("exchange"),
-                               r.get("quoteType"))
+                               r.get("quoteType"),
+                               r.get("exchange"), r.get("score"))
             if row:
                 out.append(row)
-            if len(out) >= max_results:
-                break
         return out
     except Exception:
         return []
@@ -492,11 +568,10 @@ def _search_yahoo_endpoint(query: str, max_results: int) -> list[dict]:
             row = _norm_result(q.get("symbol"),
                                q.get("shortname") or q.get("longname"),
                                q.get("exchDisp") or q.get("exchange"),
-                               q.get("quoteType"))
+                               q.get("quoteType"),
+                               q.get("exchange"), q.get("score"))
             if row:
                 out.append(row)
-            if len(out) >= max_results:
-                break
         return out
     except Exception:
         return []

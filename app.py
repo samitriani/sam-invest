@@ -132,6 +132,17 @@ def afficher_compte_rendu(cr: dict) -> None:
             st.text(d)
 
 
+def libelle_resultat(r: dict) -> str:
+    """Libelle d'un resultat de recherche, avec alerte sur les cotations relais.
+
+    Une cotation secondaire (Munich, Francfort, MTF...) porte le meme cours mais
+    presque aucun fondamental cote Yahoo : le diagnostic y sort avec WACC, PER et
+    PBR a "n/d". On le signale au lieu de laisser choisir a l'aveugle.
+    """
+    marque = " ⚠️ cotation secondaire" if r.get("rang", 0) else ""
+    return f"{r['symbol']} — {r['nom']} ({r['bourse']}, {r['type']}){marque}"
+
+
 def fmt_dt(valeur) -> str:
     """Formate une date ISO (UTC) ou un timestamp en 'JJ/MM/AAAA HH:MM' heure locale."""
     try:
@@ -1016,6 +1027,8 @@ def _rendre_etape_chiffres(etape: dict, date_exo: str = "", date_maj: str = "") 
         )
     st.markdown("<table style='width:100%;border-collapse:collapse'>"
                 + "".join(lignes) + "</table>", unsafe_allow_html=True)
+    if etape.get("note"):  # mise en garde propre a l'etape (ex : societe financiere)
+        st.caption(f"🚬 {etape['note']}")
 
 
 def _entete_diag(diag: dict) -> None:
@@ -1140,14 +1153,15 @@ def page_diagnostic():
         rechercher = st.form_submit_button("🔎 Rechercher", use_container_width=True)
     if rechercher and q_diag.strip():
         with st.spinner("Recherche (Yahoo)..."):
-            st.session_state["diag_results"] = search_instruments(q_diag.strip(), max_results=8)
+            st.session_state["diag_results"] = search_instruments(
+                q_diag.strip(), max_results=8,
+                finnhub_key=config.secrets.finnhub_api_key)
 
     # Etape 2 : selection + bouton Analyser.
     analyser, ticker_sel = False, None
     results = st.session_state.get("diag_results")
     if results:
-        opts = {f"{r['symbol']} — {r['nom']} ({r['bourse']}, {r['type']})": r["symbol"]
-                for r in results}
+        opts = {libelle_resultat(r): r["symbol"] for r in results}
         pick = st.selectbox("Selectionne l'entreprise a analyser", list(opts.keys()), key="diag_pick")
         ticker_sel = opts.get(pick)
         # Deja analysee ? On le dit AVANT de relancer un appel Opus (le plus cher).
@@ -1183,7 +1197,8 @@ def page_diagnostic():
                 _rendre_etape_chiffres(etape, d_exo, d_maj)
                 st.caption("🤖 Conclusion — LLM · Claude Opus 4.8")
                 conclusions[etape["id"]] = st.write_stream(
-                    llm.conclusion_etape_stream(config.secrets, etape["titre"], etape["lignes"])
+                    llm.conclusion_etape_stream(config.secrets, etape["titre"],
+                                                etape["lignes"], etape.get("note", ""))
                 )
                 _sauver_diag(diag, conclusions, "", genere_le, "partiel")
             with summary_ph.container():
@@ -1386,7 +1401,8 @@ def page_watchlist():
         btn_search = st.form_submit_button("🔎 Rechercher", use_container_width=True)
     if btn_search and q.strip():
         with st.spinner("Recherche (Yahoo)..."):
-            st.session_state["search_results"] = search_instruments(q.strip())
+            st.session_state["search_results"] = search_instruments(
+                q.strip(), finnhub_key=config.secrets.finnhub_api_key)
 
     # Flash des doublons detectes au dernier ajout par recherche (survit au rerun).
     for tk, jumeau in st.session_state.pop("wl_doublons_flash", []):
@@ -1395,7 +1411,7 @@ def page_watchlist():
 
     results = st.session_state.get("search_results")
     if results:
-        labels = {f"{r['symbol']} — {r['nom']} ({r['bourse']}, {r['type']})": r for r in results}
+        labels = {libelle_resultat(r): r for r in results}
         choix = st.multiselect("Resultats — coche ce que tu veux ajouter :", list(labels.keys()))
         if st.button("➕ Ajouter a la watchlist", disabled=not choix):
             existants = {i.ticker.upper() for i in config.watchlist}

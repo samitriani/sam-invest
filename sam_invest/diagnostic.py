@@ -100,9 +100,40 @@ def L(label, valeur, source, doute=False):
     return {"label": label, "valeur": valeur, "source": source, "doute": doute}
 
 
-def _etape(id_, titre, lignes):
-    """lignes = liste de dicts (voir L())."""
-    return {"id": id_, "titre": titre, "lignes": lignes}
+def _dt(condition, valeur) -> bool:
+    """Drapeau de doute, uniquement si la valeur existe.
+
+    Evite d'afficher "🚬 n/d" : une donnee absente est deja signalee comme telle,
+    la marquer douteuse en plus n'apprend rien et brouille le tableau.
+    """
+    return bool(condition) and valeur is not None
+
+
+def _etape(id_, titre, lignes, note=""):
+    """lignes = liste de dicts (voir L()) ; note = mise en garde sur l'etape."""
+    return {"id": id_, "titre": titre, "lignes": lignes, "note": note}
+
+
+# --------------------------------------------------------------------------
+# Detection des societes financieres (banques, assureurs, holdings)
+# --------------------------------------------------------------------------
+_SECTEURS_FINANCIERS = {"financial services", "financials"}
+
+
+def _est_financiere(secteur, gross, op_income, cur_assets) -> bool:
+    """Vrai si les comptes suivent le schema d'une societe financiere.
+
+    Deux signaux concordants (verifies sur PEUG.PA, BNP.PA, CS.PA, BRK-B contre
+    AI.PA, NVDA, MC.PA, SAN.PA, URW.PA, ORA.PA) :
+      - le secteur Yahoo ;
+      - l'absence SIMULTANEE de marge brute, de resultat operationnel et d'actif
+        courant — une banque ou une holding ne presente ni compte de resultat
+        par fonction, ni ventilation courant / non courant.
+    Le second rattrape les tickers ou `.info` est vide.
+    """
+    if str(secteur or "").strip().lower() in _SECTEURS_FINANCIERS:
+        return True
+    return gross is None and op_income is None and cur_assets is None
 
 
 # --------------------------------------------------------------------------
@@ -169,18 +200,30 @@ def construire_diagnostic(config: AppConfig, ticker: str) -> dict:
     except Exception:
         pass
 
+    # Societe financiere -> les ratios rapportes au CA perdent leur sens : le
+    # resultat vient surtout de postes qui ne transitent pas par le chiffre
+    # d'affaires (variations de juste valeur, marge d'interet, primes). Cas
+    # vecu : Peugeot Invest affichait 82,6% de "marge nette".
+    financiere = _est_financiere(info.get("sector"), gross, op_income, cur_assets)
+    NOTE_FIN = ("Societe financiere (banque, assureur ou holding) : le resultat "
+                "provient surtout de postes hors chiffre d'affaires (juste valeur, "
+                "marge d'interet, primes). Les ratios rapportes au CA, marques 🚬, "
+                "ne sont pas comparables a ceux d'une societe industrielle.")
+
     etapes = []
 
     # 1) Activite & marges
     rev_prev = _val(inc, "Total Revenue", 1)
     croissance_ca = _div(revenue, rev_prev) - 1 if (revenue and rev_prev) else None
+    marge_nette = _div(net_income, revenue)
     etapes.append(_etape("marges", "1. Activite & marges", [
         L("Chiffre d'affaires", _money(revenue, dev), "yfinance"),
         L("Croissance du CA (YoY)", _pct(croissance_ca), "calcule"),
         L("Marge brute", _pct(_div(gross, revenue)), "calcule"),
         L("Marge operationnelle", _pct(_div(op_income, revenue)), "calcule"),
-        L("Marge nette", _pct(_div(net_income, revenue)), "calcule"),
-    ]))
+        L("Marge nette", _pct(marge_nette), "calcule",
+          doute=_dt(financiere, marge_nette)),
+    ], note=NOTE_FIN if financiere else ""))
 
     # 2) Rentabilite
     roe = _div(net_income, equity)
@@ -209,11 +252,12 @@ def construire_diagnostic(config: AppConfig, ticker: str) -> dict:
     eva = spread * invested if (spread is not None and invested is not None) else None
     dv = mismatch or beta is None  # doute sur le bloc WACC
     etapes.append(_etape("valeur", "3. Creation de valeur", [
-        L("Cout des capitaux propres (CAPM)", _pct(cout_capitaux), "calcule", doute=(beta is None)),
+        L("Cout des capitaux propres (CAPM)", _pct(cout_capitaux), "calcule",
+          doute=_dt(beta is None, cout_capitaux)),
         L("Cout de la dette (apres impot)", _pct(cout_dette_net), "calcule"),
-        L("WACC estime", _pct(wacc), "calcule", doute=dv),
-        L("ROIC - WACC (spread)", _pct(spread), "calcule", doute=dv),
-        L("EVA (creation de valeur)", _money(eva, dev), "calcule", doute=dv),
+        L("WACC estime", _pct(wacc), "calcule", doute=_dt(dv, wacc)),
+        L("ROIC - WACC (spread)", _pct(spread), "calcule", doute=_dt(dv, spread)),
+        L("EVA (creation de valeur)", _money(eva, dev), "calcule", doute=_dt(dv, eva)),
     ]))
 
     # 4) Structure financiere / solvabilite
@@ -229,12 +273,15 @@ def construire_diagnostic(config: AppConfig, ticker: str) -> dict:
 
     # 5) Generation de cash
     fcf_src = "yfinance" if _val(cf, "Free Cash Flow") is not None else "calcule"
+    marge_fcf = _div(fcf, revenue)
     etapes.append(_etape("cash", "5. Generation de cash", [
         L("Flux de tresorerie operationnel", _money(ocf, dev), "yfinance"),
         L("Free cash flow (FCF)", _money(fcf, dev), fcf_src),
-        L("Marge de FCF", _pct(_div(fcf, revenue)), "calcule"),
+        L("Marge de FCF", _pct(marge_fcf), "calcule", doute=_dt(financiere, marge_fcf)),
         L("FCF / dette nette", _x(_div(fcf, net_debt) if (net_debt and net_debt > 0) else None), "calcule"),
-    ]))
+    ], note=("Pour une societe financiere, le flux operationnel absorbe les "
+             "mouvements de portefeuille et de credit : il ne mesure pas la "
+             "capacite d'autofinancement au sens industriel." if financiere else "")))
 
     # 6) Croissance (CAGR sur l'historique reellement disponible)
     cagr_ca, ans_ca = _cagr(inc, "Total Revenue", revenue)
@@ -257,17 +304,34 @@ def construire_diagnostic(config: AppConfig, ticker: str) -> dict:
     fcf_yield = _div(fcf, market_cap)
     etapes.append(_etape("valorisation", "7. Valorisation", [
         L("PER (cours / benefice)", _ratio(per) if (per and 0 < per < 1000) else "n/d", "yfinance"),
-        L("Price / Book (cours / capitaux propres)", _ratio(pbr), "calcule", doute=mismatch),
-        L("Price / Sales", _ratio(ps), "calcule", doute=mismatch),
-        L("VE / EBITDA", _x(ev_ebitda), "yfinance", doute=mismatch),
-        L("Rendement du FCF", _pct(fcf_yield), "calcule", doute=mismatch),
-    ]))
+        L("Price / Book (cours / capitaux propres)", _ratio(pbr), "calcule",
+          doute=_dt(mismatch, pbr)),
+        L("Price / Sales", _ratio(ps), "calcule", doute=_dt(mismatch or financiere, ps)),
+        L("VE / EBITDA", _x(ev_ebitda), "yfinance", doute=_dt(mismatch, ev_ebitda)),
+        L("Rendement du FCF", _pct(fcf_yield), "calcule",
+          doute=_dt(mismatch or financiere, fcf_yield)),
+    ], note=("Pour une societe financiere, le Price / Book (cours rapporte a "
+             "l'actif net) est le multiple pertinent ; le Price / Sales et le "
+             "rendement du FCF ne le sont pas." if financiere else "")))
 
-    note = None
+    # Mises en garde globales, cumulables.
+    notes = []
     if mismatch:
-        note = (f"Fiabilite reduite : etats financiers en {dev} mais cotation en {dc}. "
-                "Les ratios melant capitalisation et postes comptables (WACC, PBR, P/S) "
-                "peuvent etre fausses par le change (marques 🚬).")
+        notes.append(f"Fiabilite reduite : etats financiers en {dev} mais cotation en {dc}. "
+                     "Les ratios melant capitalisation et postes comptables (WACC, PBR, P/S) "
+                     "peuvent etre fausses par le change (marques 🚬).")
+    if financiere:
+        notes.append(NOTE_FIN)
+    if market_cap is None or beta is None:
+        # Sans capitalisation ni beta, des etapes entieres sortent vides. Le dire
+        # explicitement : un tableau de "n/d" sans explication passe pour un bug.
+        manquants = ", ".join(n for n, v in
+                              (("capitalisation boursiere", market_cap), ("beta", beta))
+                              if v is None)
+        notes.append(f"Donnees de marche absentes chez yfinance ({manquants}) : le WACC, "
+                     "la creation de valeur et une partie des multiples de valorisation "
+                     "restent a n/d. C'est frequent sur une cotation secondaire "
+                     "(Munich, Francfort, OTC) : reessaie avec la cotation principale.")
 
     return {
         "ticker": ticker.upper(),
@@ -276,7 +340,7 @@ def construire_diagnostic(config: AppConfig, ticker: str) -> dict:
         "annee": annee,
         "date_reference": date_ref,       # cloture de l'exercice (base des chiffres comptables)
         "date_recuperation": date.today().isoformat(),  # jour de la recuperation (cours/multiples live)
-        "note_fiabilite": note,
+        "note_fiabilite": "\n\n".join(notes) if notes else None,
         "hypotheses": {"taux_sans_risque": rf, "prime_marche": prime, "beta": beta},
         "etapes": etapes,
     }

@@ -420,6 +420,9 @@ def _section_diagnostic(diag_result: dict | None) -> list[str]:
             valeur = f"🚬 {ligne['valeur']}" if ligne.get("doute") else ligne["valeur"]
             out.append(f"| {_cell(ligne['label'])} | {_cell(valeur)} | {_cell(ligne['source'])} |")
         out.append("")
+        if etape.get("note"):  # mise en garde propre a l'etape (societe financiere...)
+            out.append(f"> 🚬 {etape['note']}")
+            out.append("")
         concl = conclusions.get(etape["id"])
         if concl:
             out.append(f"_Conclusion (Claude Opus)_ : {concl}")

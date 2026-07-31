@@ -436,13 +436,20 @@ def _diag_lignes_txt(lignes: list) -> str:
     return "\n".join(out)
 
 
-def conclusion_etape_stream(secrets: Secrets, titre: str, lignes: list):
-    """Generateur de texte (streaming) : conclusion Opus 4.8 d'une etape."""
+def conclusion_etape_stream(secrets: Secrets, titre: str, lignes: list, note: str = ""):
+    """Generateur de texte (streaming) : conclusion Opus 4.8 d'une etape.
+
+    `note` porte la mise en garde calculee par diagnostic.py (ex : societe
+    financiere). Sans elle, le modele commenterait une "marge nette de 82,6%"
+    comme une performance industrielle exceptionnelle.
+    """
     client = _client(secrets)
     if client is None:
         yield "(Conclusion indisponible : cle Claude absente.)"
         return
-    user = f"Etape : {titre}\nChiffres :\n{_diag_lignes_txt(lignes)}\n\nRedige la conclusion."
+    garde = f"\nMise en garde a respecter : {note}" if note else ""
+    user = (f"Etape : {titre}{garde}\nChiffres :\n{_diag_lignes_txt(lignes)}\n\n"
+            "Redige la conclusion.")
     try:
         with client.messages.stream(
             model=secrets.model_opus,
