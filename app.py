@@ -753,21 +753,51 @@ def page_instrument():
 def page_briefing():
     titre_page("🧠", "Ma synthese",
                "La lecture d'ensemble de tes valeurs, ecrite pour toi.")
-    btn_synthese = st.button("🧠 Ecrire ma synthese", use_container_width=True,
-                             disabled=not config.watchlist or not config.secrets.anthropic_api_key)
 
     # La synthese reprend cours et actualites : on verifie leur fraicheur.
     donnees_fraiches, asof_donnees = fraicheur("donnees")
     news_fraiches, asof_news = fraicheur("news")
+    manquants = ([] if donnees_fraiches else ["cours"]) + ([] if news_fraiches else ["actualites"])
+
+    # --- UN SEUL bouton, qui fait TOUT ce qu'il faut ---------------------------
+    # Il y en avait deux : « Ecrire ma synthese », qui REFUSAIT d'ecrire des que
+    # les donnees avaient plus de FRAICHEUR_MAX_H heures, et un second bouton
+    # (affiche seulement dans ce cas) qui actualisait puis ecrivait. Sur telephone
+    # c'est le premier qu'on lit et qu'on touche, et il ne repond jamais : les
+    # cours ont presque toujours plus de deux heures quand on rouvre l'app en
+    # transports. Un bouton qui ne rend pas le service qu'annonce son libelle est
+    # un bouton casse, meme quand il affiche un avertissement en dessous.
+    # Desormais le libelle ANNONCE le travail reel, et le bouton le fait.
+    btn_synthese = st.button(
+        "🧠 Ecrire ma synthese" if not manquants
+        else f"🧠 Actualiser {' + '.join(manquants)} puis ecrire ma synthese",
+        use_container_width=True,
+        disabled=not config.watchlist or not config.secrets.anthropic_api_key,
+    )
 
     def _tag_fraicheur(frais: bool, asof: str | None) -> str:
         return f"**{fmt_dt(asof) if asof else 'jamais'}**" + ("" if frais else " ⚠️")
 
+    # La duree est annoncee AVANT le clic, en texte visible : une redaction dure
+    # 2 a 3 minutes, et sur telephone on referme l'ecran bien avant si personne ne
+    # l'a dit. Pas d'infobulle : il n'y a pas de survol sur un telephone.
     st.caption(
         f"🕒 Cours : {_tag_fraicheur(donnees_fraiches, asof_donnees)} · "
         f"Actualites : {_tag_fraicheur(news_fraiches, asof_news)} "
-        f"(⚠️ = plus vieux que {FRAICHEUR_MAX_H} h)."
+        f"(⚠️ = plus vieux que {FRAICHEUR_MAX_H} h). "
+        + ("⏱️ Compte 3 a 4 min et garde l'app ouverte."
+           if manquants else "⏱️ Compte 2 a 3 min et garde l'app ouverte.")
     )
+
+    # --- Le compte rendu du dernier clic, rejoue APRES le rerun ---------------
+    # La generation se termine par st.rerun() (pour que la page se redessine avec
+    # les donnees fraiches). Or un rerun efface tout ce qui a ete ecrit pendant le
+    # run : les st.error / st.info emis par _generer_briefing ne parvenaient
+    # jamais a l'ecran. Un echec Claude se traduisait donc, cote utilisateur, par
+    # « j'appuie et il ne se passe rien ». On fait transiter le message par
+    # session_state pour qu'il survive au rerun, et on l'affiche une fois.
+    for _niveau, _texte in st.session_state.pop("synthese_messages", []):
+        getattr(st, _niveau)(_texte)
 
     # --- Recuperation cross-appareil : le briefing genere est persiste en base (pas
     # seulement en session). Si cette session (nouvel appareil/navigateur) n'a encore
@@ -783,6 +813,10 @@ def page_briefing():
             st.session_state["synthese_asof"] = _cache.get("synthese_asof")
 
     data = construire_briefing(config)  # deterministe : lit la base, n'appelle pas Claude
+
+    def _message(niveau: str, texte: str) -> None:
+        """Empile un message a afficher au prochain run (survit au st.rerun)."""
+        st.session_state.setdefault("synthese_messages", []).append((niveau, texte))
 
     def _generer_briefing() -> None:
         """UN appel Sonnet (ou reprise du cache si donnees/news inchangees).
@@ -806,9 +840,9 @@ def page_briefing():
             except Exception:
                 st.session_state["synth_instruments"] = {}
             st.session_state["synthese_asof"] = _cache.get("synthese_asof")
-            st.info(f"ℹ️ Donnees et news inchangees depuis le dernier briefing "
-                    f"(genere le {fmt_dt(_cache['generated_at'])}) : texte recupere "
-                    "sans nouvel appel Claude.")
+            _message("info", f"ℹ️ Donnees et news inchangees depuis la derniere synthese "
+                             f"(ecrite le {fmt_dt(_cache['generated_at'])}) : texte recupere "
+                             "sans nouvel appel Claude.")
             log("[UI] briefing: donnees/news inchangees -> cache reutilise (pas d'appel Sonnet).")
             return
 
@@ -849,35 +883,35 @@ def page_briefing():
             )
             log(f"[UI] briefing stocke: global={len(res.get('global') or '')} chars, "
                 f"instruments={len(res.get('instruments') or {})}")
+            _message("success", "✅ Synthese ecrite. Elle est enregistree : tu la "
+                                "retrouveras meme apres une coupure ou depuis un autre "
+                                "appareil.")
         else:
-            st.error("Briefing indisponible (cle/credit Claude ?). Voir data/sam_invest.log.")
+            _message("error",
+                     "❌ Claude n'a pas repondu : la synthese n'a pas pu etre ecrite. "
+                     "Le plus souvent c'est le reseau qui a lache pendant la redaction "
+                     "(elle dure 2 a 3 minutes) — reessaie, les cours et actualites "
+                     "recuperes, eux, sont deja enregistres. Detail dans "
+                     "`data/sam_invest.log`.")
             log("[UI] briefing = None -> rien a afficher", "error")
 
-    # Generation de la synthese. Doit s'executer AVANT l'affichage (meme rerun).
-    if btn_synthese and donnees_fraiches and news_fraiches:
+    # --- Le clic : actualiser ce qui manque, PUIS ecrire. Toujours les deux. ---
+    # Le rerun final redessine la page avec les donnees fraiches ; les messages du
+    # run precedent sont rejoues plus haut, donc rien ne se perd en route.
+    if btn_synthese:
+        log(f"[UI] clic 'Ecrire ma synthese' (a actualiser: {manquants or 'rien'})")
+        for _besoin, _fn, _lib in (("cours", update_donnees, "Mise a jour des donnees"),
+                                   ("actualites", update_news, "Mise a jour des news")):
+            if _besoin in manquants:
+                _cr = run_update(_fn, _lib)
+                if _cr.get("status") != "ok":
+                    # On ecrit quand meme la synthese : mieux vaut une lecture sur des
+                    # chiffres un peu vieux, en le disant, que rien du tout.
+                    _message("warning", f"⚠️ Actualisation des {_besoin} incomplete "
+                                        f"({_cr.get('resume', 'raison inconnue')}). La synthese "
+                                        "est ecrite sur les dernieres donnees disponibles.")
         _generer_briefing()
-
-    # Raccourci quotidien : si donnees/news sont perimees, un seul bouton
-    # rafraichit ce qui manque PUIS genere, sans quitter la page.
-    if (not (donnees_fraiches and news_fraiches)
-            and config.watchlist and config.secrets.anthropic_api_key):
-        manquants = ([] if donnees_fraiches else ["cours"]) + ([] if news_fraiches else ["actualites"])
-        if btn_synthese:
-            st.warning(
-                f"🌿 **{' et '.join(manquants)}** trop anciennes (rien de recupere, ou plus "
-                f"vieux que {FRAICHEUR_MAX_H} h). Utilise le bouton ci-dessous pour tout faire "
-                "en un clic, ou lance l'actualisation depuis Aujourd'hui."
-            )
-            log("[UI] 'Generer le briefing' : donnees/news pas fraiches "
-                f"(donnees={donnees_fraiches}, news={news_fraiches})", "warning")
-        if st.button(f"🔄 Actualiser {' + '.join(manquants)} puis ecrire ma synthese",
-                     key="refresh_then_brief", use_container_width=True):
-            if not donnees_fraiches:
-                run_update(update_donnees, "Mise a jour des donnees")
-            if not news_fraiches:
-                run_update(update_news, "Mise a jour des news")
-            _generer_briefing()
-            st.rerun()
+        st.rerun()
 
     # =====================================================================
     # SECTION GLOBAL (big picture)
@@ -937,8 +971,8 @@ def page_briefing():
             st.caption(f"Synthese basee sur les donnees du {fmt_dt(st.session_state['synthese_asof'])}.")
         st.markdown(st.session_state["synth_global"])
     elif config.secrets.anthropic_api_key:
-        st.caption("Clique sur « Generer le briefing » pour la vue d'ensemble et les "
-                   "commentaires par instrument.")
+        st.caption("Clique sur « Ecrire ma synthese » en haut de la page pour la vue "
+                   "d'ensemble et les commentaires valeur par valeur.")
     else:
         st.info("ANTHROPIC_API_KEY absente : briefing desactive, mais les flags et donnees "
                 "par instrument ci-dessous restent valables.")
@@ -955,9 +989,9 @@ def page_briefing():
         f"cles_communes={len([i for i in config.watchlist if i.ticker in synth_inst])}")
 
     if not synth_inst and config.secrets.anthropic_api_key:
-        st.info("💡 Le briefing par instrument apparait apres "
-                "« Generer le briefing » en haut de la page. Les chiffres, flags et news "
-                "ci-dessous sont deja disponibles sans appel Claude.")
+        st.info("💡 Le commentaire valeur par valeur apparait apres "
+                "« Ecrire ma synthese » en haut de la page. Les chiffres, alertes et "
+                "actualites ci-dessous sont deja disponibles sans appel Claude.")
 
     # Recapitulatif des recos. Masque si aucune n'est connue : un briefing genere
     # avant l'ajout des recos afficherait sinon un « 0 · 0 · 0 » trompeur.
@@ -1008,7 +1042,7 @@ def page_briefing():
                     st.markdown("**🎯 Conclusion & arguments**")
                     st.markdown(entry["conclusion"])
             else:
-                st.caption("📝 Briefing non genere — clique « Generer le briefing » "
+                st.caption("📝 Pas encore de commentaire — clique « Ecrire ma synthese » "
                            "en haut de la page.")
             st.markdown("**Chiffres cles**")
             s = snaps_by.get(t)
@@ -1766,13 +1800,17 @@ def page_about():
         st.markdown(
             "L'app appelle Claude sur certains boutons seulement. Ordre de grandeur :\n\n"
             "| Bouton | Duree | Cout |\n|---|---|---|\n"
-            "| Actualiser les cours | quelques secondes | gratuit |\n"
-            "| Actualiser les actualites | quelques secondes | tres faible |\n"
-            "| Ecrire ma synthese | ~30 s | 1 appel pour toute la liste |\n"
+            "| Actualiser les cours | ~30 s pour 20 valeurs | gratuit |\n"
+            "| Actualiser les actualites | ~30 s pour 20 valeurs | tres faible |\n"
+            "| Ecrire ma synthese | **2 a 3 min** (+1 min si les cours ou les "
+            "actualites doivent etre actualises d'abord) | 1 appel pour toute la liste |\n"
             "| Generer des suggestions | ~20 s | 1 appel |\n"
             "| Analyser (page Analyser) | ~1 min | le plus cher : 1 appel par etape |\n"
-            "| Tout mettre a jour | quelques secondes | cours + actualites, **pas** la "
+            "| Tout mettre a jour | ~1 min | cours + actualites, **pas** la "
             "synthese |\n\n"
+            "Les durees les plus longues valent la peine d'etre connues d'avance : "
+            "la synthese ecrit un commentaire par valeur, et l'app doit rester "
+            "ouverte le temps qu'elle s'ecrive.\n\n"
             "Deux garde-fous evitent de payer deux fois : la synthese est reprise du "
             "cache si rien n'a bouge, et une analyse deja produite se rouvre "
             "gratuitement au lieu d'etre refaite.\n\n"

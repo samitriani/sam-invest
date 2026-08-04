@@ -116,6 +116,11 @@ s'applique a **n'importe quelle entreprise cotee** — c'est cette difference de
   **3 parties** — chiffres, actualites, conclusion & arguments — plus une
   **recommandation ACHAT / GARDER / VENDRE** en badge, visible dans le titre sans
   avoir a l'ouvrir. Un seul appel Sonnet couvre le global ET tous les instruments.
+  Le bouton **« Ecrire ma synthese »** fait tout le necessaire en un geste : si les
+  cours ou les actualites datent de plus de deux heures, il les actualise d'abord
+  et son libelle le dit _(« Actualiser cours + actualites puis ecrire ma
+  synthese »)_. Compte 2 a 4 min selon le cas, app ouverte. Le texte obtenu est
+  ecrit en base : une coupure ne le perd pas, et un autre appareil le retrouve.
 - **🔬 Analyser** — *« Cette boite vaut-elle quelque chose ? »* **Portee differente :
   toute entreprise cotee, suivie ou non.** Recherche libre (tes valeurs et tes
   analyses passees sont proposees en raccourci), puis une analyse financiere en

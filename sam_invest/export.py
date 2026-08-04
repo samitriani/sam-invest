@@ -173,7 +173,7 @@ def _section_briefing_global(synth_global: str | None, synth_instruments: dict) 
     if synth_global:
         out.append(synth_global)
     else:
-        out.append("_Briefing non genere dans la session (bouton « Generer le briefing »)._")
+        out.append("_Synthese pas encore ecrite (bouton « Ecrire ma synthese »)._")
     out.append("")
     if synth_instruments:
         from collections import Counter
