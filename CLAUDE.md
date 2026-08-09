@@ -57,6 +57,7 @@ streamlit run app.py            # Windows pour l'utilisateur : launch_windows.ba
 python -m tests.test_debt_to_equity
 python -m tests.test_classement_bourses
 python -m tests.test_societe_financiere
+python -m tests.test_masquage_alertes
 ```
 
 Python 3.11+ (le devcontainer est en 3.11). `streamlit>=1.50` est un plancher
@@ -195,6 +196,15 @@ par page, puis la navigation en fin de fichier.
   `.streamlit/config.toml`. Ne pas construire de design system CSS parallele.
 - **Tooltips** : passer par `glossaire.definition/formule/abbr` (source de verite
   unique), jamais par des textes d'aide ecrits en dur dans l'UI.
+- **Les alertes ne sont sur aucune page** : elles sont rassemblees dans le menu
+  ☰ (`rendre_menu_alertes`), avec une croix par alerte et un « Tout supprimer ».
+  Ne pas les reafficher dans une page — elles etaient auparavant sur « Ma
+  synthese », a deux endroits, donc affichees deux fois. Un flag etant
+  **recalcule** a chaque rendu, « supprimer » ne peut que **masquer** : le
+  masquage (`db.masquer_flags`) est un report qui expire a la prochaine
+  actualisation des cours, et cette regle doit rester ecrite en clair dans l'UI.
+  Les flags sont calcules **une seule fois par run** dans `FLAGS_COURANTS`, avant
+  `navigation.run()`, et servent aussi au tri de « Ma synthese ».
 - **`st.session_state`** ne porte que de l'ephemere (`synth_global`,
   `synth_instruments`, `search_results`, `idees_candidats`, messages a rejouer
   apres un `st.rerun()`). Tout ce qui doit survivre a une coupure va en base.
@@ -218,9 +228,10 @@ reference deployee sur Streamlit Cloud. **`.env` et `data/` ne le sont jamais.**
   tete de script, pour que `load_secrets()` ait un seul chemin de code
   (`os.getenv`) en local comme en ligne.
 
-**SQLite** (`db.py`) — 12 tables, dont `prices`, `quotes`, `fundamentals`,
+**SQLite** (`db.py`) — 13 tables : `prices`, `quotes`, `fundamentals`,
 `events_estimates`, `analyst_ratings`, `profile`, `news`, `news_analysis`,
-`update_log`, `briefing_cache`, `flags_seen`, `diagnostic_cache`.
+`update_log`, `briefing_cache`, `flags_seen`, `flags_masques`,
+`diagnostic_cache`.
 
 - **Tout le SQL vit dans `db.py`.** Les autres modules appellent ses fonctions.
 - Le schema est applique par `executescript` avec `CREATE TABLE IF NOT EXISTS` :
@@ -262,9 +273,12 @@ reference deployee sur Streamlit Cloud. **`.env` et `data/` ne le sont jamais.**
 
 ## 10. Tests
 
-Trois scripts de **non-regression** dans `tests/`, ecrits sans framework : un
-`_run()` avec des `assert`, lance par `python -m tests.<module>`. Ils ne
-touchent ni le reseau ni la base et ne demandent que `pandas`.
+Quatre scripts de **non-regression** dans `tests/`, ecrits sans framework : un
+`_run()` avec des `assert`, lance par `python -m tests.<module>`. Aucun ne touche
+au reseau ni a `data/`. Les trois premiers ne demandent que `pandas` ;
+`test_masquage_alertes` ouvre une base SQLite **temporaire** (`db.DB_PATH` est
+detourne vers un `TemporaryDirectory` avant tout appel) — a reproduire tel quel
+si un futur test doit toucher a la base.
 
 Chacun documente en tete le **bug reel** qu'il verrouille :
 
@@ -273,6 +287,7 @@ Chacun documente en tete le **bug reel** qu'il verrouille :
 | `test_debt_to_equity` | `yfinance.info['debtToEquity']` est **toujours** un pourcentage. L'ancienne heuristique "diviser si > 10" fabriquait de fausses alertes rouges (NVDA a 6,55 %). Priorite au calcul direct sur le bilan. |
 | `test_classement_bourses` | Une cotation relais (Munich, Francfort) ou marginale (MTF, OTC) doit passer **derriere** la cotation principale. Liste **noire**, jamais blanche : une place inconnue est presumee principale. |
 | `test_societe_financiere` | Banques/assureurs/holdings detectes par le secteur **ou** par la forme des etats. Peugeot Invest affichait 82,6 % de "marge nette" sans avertissement. |
+| `test_masquage_alertes` | Le masquage d'une alerte est un **report**, pas une suppression : il expire des que `donnees_asof` change. Oublier cette comparaison rendrait la croix definitive et ferait rater une degradation reelle. Seul test a toucher une base — **temporaire**, jamais `data/`. |
 
 Convention a suivre : **quand un bug de donnees est corrige, ajouter un script du
 meme format** qui reproduit le cas d'origine, avec le contexte en docstring.

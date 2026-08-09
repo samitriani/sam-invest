@@ -20,7 +20,13 @@ plus une mise a jour globale dans le menu (consommation d'API maitrisee).
   - Ma liste       : edition de la liste + suggestions d'ajout (Sonnet, au clic).
   - Une entreprise : la fiche complete d'UNE valeur — cours, actualites, chiffres,
                      analystes — puis l'analyse approfondie (Opus, au clic).
-  - Ma synthese    : alertes (deterministes, gratuites) + synthese (Sonnet, au clic).
+  - Ma synthese    : la lecture redigee par Claude, et elle seule (Sonnet, au clic).
+
+Les alertes (deterministes, gratuites) ne vivent sur aucune page : elles sont
+rassemblees dans le menu ☰, avec une croix par alerte et un « Tout supprimer ».
+Supprimer = masquer jusqu'a la prochaine actualisation des cours (voir
+rendre_menu_alertes et db.masquer_flags) : un flag est recalcule a chaque
+affichage, il ne peut pas etre efface.
 
 Quand la watchlist est vide, la navigation est court-circuitee au profit d'un
 ecran de demarrage : rien d'autre n'a de sens tant qu'aucune valeur n'est suivie.
@@ -37,7 +43,7 @@ from datetime import datetime, timezone
 import pandas as pd
 import streamlit as st
 
-from sam_invest import db, llm, signals
+from sam_invest import db, llm, rules, signals
 from sam_invest.briefing import construire_briefing, indicateurs_ligne
 from sam_invest.export import construire_export_md
 from sam_invest.data_sources import search_instruments, suggest_theme
@@ -109,6 +115,10 @@ st.session_state.setdefault("idees_candidats", None)
 # les couleurs. Composant natif Streamlit : rien a maintenir cote CSS.
 RECO_LABEL = {"achat": ("ACHAT", "green"), "garder": ("GARDER", "orange"),
               "vendre": ("VENDRE", "red")}
+
+REGLE_LABEL = {"chute": "chute brutale", "technique": "signal technique",
+               "degradation": "degradation", "evenement": "evenement",
+               "revision": "revision d'estimations"}
 
 
 # ==========================================================================
@@ -185,6 +195,115 @@ def fraicheur(kind: str) -> tuple[bool, str | None]:
         return False, m.get("asof")
     age_h = (datetime.now(timezone.utc) - dt).total_seconds() / 3600
     return age_h <= FRAICHEUR_MAX_H, m["asof"]
+
+
+# ==========================================================================
+# MENU DES ALERTES (dans le menu burger) — UN SEUL endroit pour tous les flags
+# --------------------------------------------------------------------------
+# Les alertes vivaient sur « Ma synthese », a deux endroits : un bloc « Vue
+# d'ensemble » en tete de page, et les MEMES flags repetes plus bas dans chaque
+# fiche d'instrument. La page melangeait donc deux lectures — le texte redige par
+# Claude et la surveillance chiffree — en affichant deux fois la meme alerte.
+#
+# Elles sont desormais rassemblees ici, dans le menu, qui porte deja tout ce qui
+# vaut pour la watchlist entiere (mise a jour globale, export, fraicheur) et
+# reste atteignable depuis les six pages. « Ma synthese » ne contient plus que la
+# lecture de Claude.
+#
+# « Supprimer » = MASQUER, jamais effacer : un flag n'est pas une ligne stockee,
+# rules.tous_les_flags le RECALCULE a chaque affichage. Le masquage est donc un
+# report qui expire a la prochaine actualisation des cours (cf. db.masquer_flags).
+# C'est ecrit en toutes lettres sous la liste : sans ca, la croix passerait pour
+# definitive et une vraie degradation pourrait etre manquee.
+# ==========================================================================
+def flag_cle(f: dict) -> str:
+    """Identite d'un flag — la meme que celle historisee par db.enregistrer_flags."""
+    return f"{f['ticker']}|{f['regle']}|{f['severite']}"
+
+
+def flag_est_nouveau(f: dict, anc: dict, asof: str | None) -> bool:
+    """Vrai si le flag est apparu lors de la DERNIERE mise a jour des donnees."""
+    a = anc.get(flag_cle(f))
+    return bool(a and asof and a["premiere_vue"] == asof)
+
+
+def rendre_menu_alertes(flags: list[dict]) -> None:
+    """Menu repliable des alertes, avec « Tout supprimer » et une croix par ligne."""
+    anc = db.anciennete_flags()
+    asof = (db.last_update("donnees") or {}).get("asof")
+    masquees = db.cles_masquees(asof)
+    maintenant = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    def _nouveau(f: dict) -> bool:
+        return flag_est_nouveau(f, anc, asof)
+
+    visibles = [f for f in flags if flag_cle(f) not in masquees]
+    alertes = [f for f in visibles if f["severite"] == "alerte"]
+    infos = [f for f in visibles if f["severite"] == "info"]
+    n_masquees = len(masquees & {flag_cle(f) for f in flags})
+
+    # Le libelle porte le compte : sur telephone le menu est ferme par defaut, et
+    # c'est la seule chose qu'on lit avant de decider de l'ouvrir.
+    if alertes:
+        label = f"🔔 {len(alertes)} alerte(s)"
+    elif infos:
+        label = f"🟡 {len(infos)} info(s)"
+    elif n_masquees:
+        label = f"🔕 {n_masquees} alerte(s) masquee(s)"
+    else:
+        label = "✅ Aucune alerte"
+
+    with st.expander(label, expanded=False):
+        if not visibles and not n_masquees:
+            st.caption("Aucun signal en cours sur tes valeurs.")
+            return
+
+        if visibles:
+            if st.button("🗑️ Tout supprimer", use_container_width=True,
+                         key="alertes_tout_supprimer",
+                         help="Masque toutes les alertes ci-dessous."):
+                db.masquer_flags([flag_cle(f) for f in visibles], asof, maintenant)
+                st.rerun()
+
+        # Alertes d'abord, infos ensuite : deux severites, un seul menu.
+        #
+        # Chaque alerte tient sur deux lignes : une EN-TETE COURTE (ticker +
+        # regle) posee a cote de la croix, puis le detail chiffre en dessous, sur
+        # toute la largeur. Le message complet ne peut pas cohabiter avec un
+        # bouton dans une sidebar de ~240 px : il repoussait la croix sur sa
+        # propre ligne, en gros bouton pleine largeur. Cette forme se scanne
+        # aussi mieux quand il y a dix alertes : on lit des tickers, pas de la
+        # prose. Le detail reste affiche : un flag doit TOUJOURS montrer la
+        # valeur observee et son seuil.
+        for f in alertes + infos:
+            cle = flag_cle(f)
+            puce = "🔴" if f["severite"] == "alerte" else "🟡"
+            neuf = "🆕 " if _nouveau(f) else ""
+            regle = REGLE_LABEL.get(f["regle"], f["regle"])
+            # Le message commence par « TICKER : » ; l'en-tete le porte deja.
+            detail = f["message"]
+            prefixe = f"{f['ticker']} : "
+            if detail.startswith(prefixe):
+                detail = detail[len(prefixe):]
+            depuis = (anc.get(cle) or {}).get("premiere_vue")
+            if depuis and not _nouveau(f):
+                detail += f" · depuis le {fmt_dt(depuis)}"
+            with st.container(horizontal=True, vertical_alignment="center"):
+                if st.button("✕", key=f"alerte_x_{cle}", width=40,
+                             help="Supprimer cette alerte"):
+                    db.masquer_flags([cle], asof, maintenant)
+                    st.rerun()
+                # Largeur explicite : sans elle le markdown reclame toute la
+                # place et fait passer la croix a la ligne.
+                st.markdown(f"{puce} {neuf}**{f['ticker']}** — {regle}", width=168)
+            st.caption(detail)
+
+        # Le compte des masquees n'est rappele ici que s'il reste des alertes
+        # visibles : quand tout est masque, le libelle du menu le dit deja.
+        if n_masquees and visibles:
+            st.caption(f"🔕 {n_masquees} alerte(s) masquee(s) pour l'instant.")
+        st.caption("Une alerte supprimee revient a la prochaine actualisation des "
+                   "cours, si la situation qui l'a declenchee tient toujours.")
 
 
 def _fmt(x, dec=2):
@@ -918,54 +1037,10 @@ def page_briefing():
     # =====================================================================
     st.markdown("## 🌍 Global")
 
-    # --- Vue d'ensemble : resume des flags + synthese globale (big picture) ---
-    flags = data["flags"]
-    flags_by: dict[str, list] = {}
-    for f in flags:
-        flags_by.setdefault(f["ticker"], []).append(f)
-
-    # Anciennete des flags (nouveau vs persistant) : historise a chaque maj des
-    # donnees. Un flag est "nouveau" s'il est apparu lors de la derniere maj.
-    _anc = db.anciennete_flags()
-    _asof_donnees_raw = (db.last_update("donnees") or {}).get("asof")
-    REGLE_LABEL = {"chute": "chute brutale", "technique": "signal technique",
-                   "degradation": "degradation", "evenement": "evenement",
-                   "revision": "revision d'estimations"}
-
-    def _flag_cle(f) -> str:
-        return f"{f['ticker']}|{f['regle']}|{f['severite']}"
-
-    def _flag_nouveau(f) -> bool:
-        a = _anc.get(_flag_cle(f))
-        return bool(a and _asof_donnees_raw and a["premiere_vue"] == _asof_donnees_raw)
-
-    def _flag_depuis(f) -> str | None:
-        a = _anc.get(_flag_cle(f))
-        return a["premiere_vue"] if a else None
-
-    alertes = [f for f in flags if f["severite"] == "alerte"]
-    infos = [f for f in flags if f["severite"] == "info"]
-    nouvelles = [f for f in alertes if _flag_nouveau(f)]
-    persistantes = [f for f in alertes if not _flag_nouveau(f)]
-    st.markdown(f"### Vue d'ensemble — {len(nouvelles)} nouvelle(s) alerte(s), "
-                f"{len(persistantes)} persistante(s), {len(infos)} info(s)")
-
-    # Nouvelles alertes EN PREMIER (ce qui a change depuis la derniere maj).
-    for f in nouvelles:
-        st.error(f"🆕 [{REGLE_LABEL.get(f['regle'], f['regle'])}] {f['message']}")
-    # Alertes persistantes regroupees par regle, repliees (deja vues).
-    if persistantes:
-        with st.expander(f"🔁 {len(persistantes)} alerte(s) persistante(s) — deja signalees"):
-            par_regle: dict[str, list] = {}
-            for f in persistantes:
-                par_regle.setdefault(f["regle"], []).append(f)
-            for regle, items in par_regle.items():
-                st.markdown(f"**{REGLE_LABEL.get(regle, regle)}** ({len(items)})")
-                for f in items:
-                    depuis = _flag_depuis(f)
-                    suffix = f" · depuis le {fmt_dt(depuis)}" if depuis else ""
-                    st.caption(f"{f['message']}{suffix}")
-
+    # Les alertes ne sont plus ici : elles vivent dans le menu ☰ (voir
+    # rendre_menu_alertes). Cette page ne porte plus que la lecture redigee par
+    # Claude — melanger le texte et la surveillance chiffree revenait a afficher
+    # deux fois la meme alerte sur un seul ecran.
     if st.session_state.get("synth_global"):
         if st.session_state.get("synthese_asof"):
             st.caption(f"Synthese basee sur les donnees du {fmt_dt(st.session_state['synthese_asof'])}.")
@@ -974,8 +1049,9 @@ def page_briefing():
         st.caption("Clique sur « Ecrire ma synthese » en haut de la page pour la vue "
                    "d'ensemble et les commentaires valeur par valeur.")
     else:
-        st.info("ANTHROPIC_API_KEY absente : briefing desactive, mais les flags et donnees "
-                "par instrument ci-dessous restent valables.")
+        st.info("ANTHROPIC_API_KEY absente : briefing desactive, mais les donnees "
+                "par instrument ci-dessous restent valables, et les alertes du "
+                "menu ☰ aussi (elles sont calculees par le code, sans IA).")
 
     # =====================================================================
     # SECTION PAR INSTRUMENT
@@ -990,8 +1066,9 @@ def page_briefing():
 
     if not synth_inst and config.secrets.anthropic_api_key:
         st.info("💡 Le commentaire valeur par valeur apparait apres "
-                "« Ecrire ma synthese » en haut de la page. Les chiffres, alertes et "
-                "actualites ci-dessous sont deja disponibles sans appel Claude.")
+                "« Ecrire ma synthese » en haut de la page. Les chiffres et les "
+                "actualites ci-dessous sont deja disponibles sans appel Claude ; "
+                "les alertes sont dans le menu ☰.")
 
     # Recapitulatif des recos. Masque si aucune n'est connue : un briefing genere
     # avant l'ajout des recos afficherait sinon un « 0 · 0 · 0 » trompeur.
@@ -1010,10 +1087,22 @@ def page_briefing():
     # Tri : ce qui merite l'attention en haut (nouvelle alerte > alerte > info >
     # rien), puis par reco (vendre d'abord, ce qui appelle une decision).
     # L'ordre de la watchlist n'est pas un ordre de priorite.
+    #
+    # Les flags ne sont plus AFFICHES ici mais continuent de porter le tri : ils
+    # sont deja calcules pour le menu (FLAGS_COURANTS), donc cela ne coute rien.
+    # Le masquage est volontairement ignore : cacher une alerte du menu ne veut
+    # pas dire que la valeur cesse de meriter d'etre regardee en premier.
+    _flags_by: dict[str, list] = {}
+    for _f in FLAGS_COURANTS:
+        _flags_by.setdefault(_f["ticker"], []).append(_f)
+    _anc = db.anciennete_flags()
+    _asof_don = (db.last_update("donnees") or {}).get("asof")
+
     def _tri_instrument(inst):
-        fl = flags_by.get(inst.ticker, [])
+        fl = _flags_by.get(inst.ticker, [])
         has_al = any(f["severite"] == "alerte" for f in fl)
-        nouvelle_al = any(_flag_nouveau(f) for f in fl if f["severite"] == "alerte")
+        nouvelle_al = any(flag_est_nouveau(f, _anc, _asof_don)
+                          for f in fl if f["severite"] == "alerte")
         sev_rank = 0 if nouvelle_al else (1 if has_al else (2 if fl else 3))
         reco = (synth_inst.get(inst.ticker) or {}).get("reco", "")
         reco_rank = {"vendre": 0, "garder": 1, "achat": 2}.get(reco, 3)
@@ -1021,8 +1110,6 @@ def page_briefing():
 
     for inst in sorted(config.watchlist, key=_tri_instrument):
         t = inst.ticker
-        fl = flags_by.get(t, [])
-        has_alerte = any(f["severite"] == "alerte" for f in fl)
         entry = synth_inst.get(t) or {}
         # Le badge de reco (mot + couleur) est le SEUL marqueur du titre : pas de
         # pastille de flag en plus, les deux systemes se telescopaient.
@@ -1066,18 +1153,8 @@ def page_briefing():
                     bits.append(f"Potentiel {e['potentiel_pct']:+.0f}%")
                 if bits:
                     st.caption(" · ".join(bits))
-            # Flags de cet instrument : badge 'nouveau' vs 'depuis le ...'.
-            for f in fl:
-                nouveau = _flag_nouveau(f)
-                prefix = "🆕 " if nouveau else ""
-                depuis = _flag_depuis(f)
-                suff = f"  _(depuis le {fmt_dt(depuis)})_" if (not nouveau and depuis) else ""
-                if f["severite"] == "alerte":
-                    st.error(f"{prefix}[{f['regle']}] {f['message']}{suff}")
-                else:
-                    st.warning(f"{prefix}[{f['regle']}] {f['message']}{suff}")
-            if not fl:
-                st.caption("Aucun flag.")
+            # Les flags de cet instrument ne sont plus repetes ici : ils etaient
+            # deja affiches en tete de page, et le sont maintenant dans le menu ☰.
             # News recentes de l'instrument (top 4)
             raw = db.get_news(t)
             if raw:
@@ -1782,12 +1859,16 @@ def page_about():
             "C'est une lecture des chiffres et des actualites, **pas un ordre** : elle "
             "s'accompagne toujours des arguments qui l'ont produite, a lire avant de "
             "decider quoi que ce soit.\n\n"
-            "**Alertes (calculees par le code, sans IA)** :\n"
-            "- **Alerte** (bandeau rouge) — chute brutale, degradation, signal "
-            "technique fort\n"
-            "- **Info** (bandeau orange) — a noter, sans urgence\n"
+            "**Alertes (calculees par le code, sans IA)** — toutes regroupees dans "
+            "le menu ☰, le meme depuis n'importe quelle page :\n"
+            "- 🔴 **Alerte** — chute brutale, degradation, signal technique fort\n"
+            "- 🟡 **Info** — a noter, sans urgence\n"
             "- 🆕 — alerte apparue lors de la **derniere** actualisation ; sans le "
-            "badge, elle est persistante (deja signalee, avec sa date d'apparition)\n\n"
+            "badge, elle est persistante (deja signalee, avec sa date d'apparition)\n"
+            "- **✕** masque une alerte, **🗑️ Tout supprimer** les masque toutes. "
+            "Elles ne sont pas effacees pour autant : une alerte est **recalculee** "
+            "a partir des cours a chaque affichage, donc elle revient a la prochaine "
+            "actualisation si la situation qui l'a declenchee tient toujours.\n\n"
             "**Actualites** : 🟢 positif · ⚪ neutre · 🔴 negatif.\n\n"
             "**Analyse approfondie** : ⚠️ signale un chiffre a verifier — aberration "
             "comptable, ratio fausse par un ecart de devise, ou ratio peu pertinent "
@@ -1954,6 +2035,14 @@ with st.sidebar:
     st.markdown("## 📊 Sam_Invest")
     st.caption("Mes valeurs, suivies au jour le jour")
     st.divider()
+    # Les alertes AVANT les actions : en ouvrant le menu on lit d'abord ce qui
+    # ne va pas, on agit ensuite. C'est la meme logique qui fait d'« Aujourd'hui »
+    # la page par defaut. Placees plus bas, elles tombaient sous la ligne de
+    # flottaison d'un ecran de telephone et il fallait scroller pour les voir.
+    # L'emplacement est reserve ici mais REMPLI plus bas, apres l'eventuelle mise
+    # a jour globale : sinon le menu afficherait les flags d'avant l'actualisation.
+    alertes_slot = st.container()
+    st.divider()
     btn_global = st.button(
         "🔄 Tout mettre a jour", use_container_width=True, disabled=not config.watchlist,
         help="Cours + actualites. N'ecrit PAS la synthese (le bouton le plus cher).",
@@ -1976,6 +2065,16 @@ with st.sidebar:
 # tableaux affiches soient deja frais.
 if btn_global:
     afficher_compte_rendu(run_update(update_global, "Mise a jour globale"))
+
+# Flags calcules UNE fois par run, apres l'eventuelle mise a jour : ils
+# alimentent le menu des alertes ci-dessous et le tri de « Ma synthese ».
+# Deterministe et local (lecture SQLite + pandas) : aucun appel reseau ni Claude.
+FLAGS_COURANTS = [
+    {"ticker": f.ticker, "regle": f.regle, "severite": f.severite, "message": f.message}
+    for f in rules.tous_les_flags(config, signals.construire_snapshots(config))
+]
+with alertes_slot:
+    rendre_menu_alertes(FLAGS_COURANTS)
 
 navigation.run()
 

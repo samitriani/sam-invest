@@ -92,7 +92,29 @@ Chaque page est nommee par la **question a laquelle elle repond**. Les quatre
 premieres parlent des valeurs **que tu suis** ; la cinquieme, **Analyser**,
 s'applique a **n'importe quelle entreprise cotee** — c'est cette difference de
 **portee** qui justifie qu'elle soit a part. Le menu contient aussi
-**« Tout mettre a jour »**, **« Exporter (.md) »** et la fraicheur des donnees.
+**« Tout mettre a jour »**, **« Exporter (.md) »**, la fraicheur des donnees et
+**toutes les alertes** (voir juste en dessous).
+
+### Les alertes vivent dans le menu ☰, nulle part ailleurs
+
+Elles etaient auparavant sur **Ma synthese**, et deux fois : un bloc en tete de
+page, puis les memes alertes repetees dans chaque fiche de valeur. Cette page
+melangeait donc deux lectures — le texte redige par Claude et la surveillance
+chiffree — en affichant deux fois la meme chose.
+
+Elles sont desormais regroupees dans un **seul menu repliable**, dont le titre
+porte le compte (« 🔔 3 alertes ») pour etre lisible sans l'ouvrir :
+
+- **✕** a cote d'une alerte la fait disparaitre ; **🗑️ Tout supprimer** les
+  masque toutes d'un coup.
+- Ce n'est pas une suppression definitive, et c'est voulu : une alerte n'est pas
+  un message stocke, elle est **recalculee a partir des cours** a chaque
+  affichage. Une alerte supprimee **revient a la prochaine actualisation des
+  cours** si la situation qui l'a declenchee tient toujours. Autrement dit, la
+  croix nettoie l'ecran pour la session en cours, elle ne desactive pas la
+  surveillance — une degradation reelle finit toujours par se resignaler.
+- Le masquage est enregistre en base : il survit a un rechargement de page et se
+  retrouve depuis un autre appareil.
 
 - **📈 Aujourd'hui** — *« Quoi de neuf ? »* C'est l'accueil, parce que c'est la
   question qu'on se pose en ouvrant l'app. Tableau des cours et signaux (*Actions*

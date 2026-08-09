@@ -130,6 +130,12 @@ CREATE TABLE IF NOT EXISTS flags_seen (
     derniere_vue  TEXT NOT NULL          -- ISO : maj des donnees la plus recente ou il etait present
 );
 
+CREATE TABLE IF NOT EXISTS flags_masques (
+    cle          TEXT PRIMARY KEY,      -- meme identite que flags_seen : 'ticker|regle|severite'
+    masque_le    TEXT NOT NULL,         -- ISO : horodatage du clic sur la croix
+    donnees_asof TEXT                   -- last_update('donnees').asof au moment du masquage
+);
+
 CREATE TABLE IF NOT EXISTS diagnostic_cache (
     ticker        TEXT PRIMARY KEY,      -- un diagnostic conserve par entreprise
     nom           TEXT,
@@ -400,6 +406,48 @@ def enregistrer_flags(flags: list[dict], asof: str) -> None:
         obsoletes = existants - set(cles)
         for cle in obsoletes:
             conn.execute("DELETE FROM flags_seen WHERE cle = ?", (cle,))
+
+
+# --- Masquage manuel des alertes (croix du menu) ---------------------------
+# Un flag n'est pas une ligne stockee : rules.tous_les_flags le RECALCULE a
+# chaque affichage. "Supprimer" une alerte ne peut donc pas l'effacer, seulement
+# la MASQUER. La regle retenue est un report : le masquage ne vaut que pour
+# l'etat des donnees au moment du clic, donc la prochaine actualisation des cours
+# fait revenir l'alerte si la condition tient toujours. C'est pour cela que
+# `donnees_asof` est stocke ET compare : il sert de date de peremption.
+#
+# En base et non en session : sur telephone un rechargement de page suffirait a
+# tout faire reapparaitre, ce qui rendrait la croix inutile.
+def masquer_flags(cles: list[str], donnees_asof: str | None, masque_le: str) -> None:
+    """Masque les flags designes jusqu'a la prochaine mise a jour des donnees."""
+    if not cles:
+        return
+    with get_conn() as conn:
+        conn.executemany(
+            """INSERT INTO flags_masques (cle, masque_le, donnees_asof)
+               VALUES (?, ?, ?)
+               ON CONFLICT(cle) DO UPDATE SET
+                 masque_le=excluded.masque_le, donnees_asof=excluded.donnees_asof""",
+            [(c, masque_le, donnees_asof or "") for c in cles],
+        )
+
+
+def cles_masquees(donnees_asof: str | None) -> set[str]:
+    """Cles masquees encore valables, et purge celles d'une actualisation passee.
+
+    La purge se fait a la lecture : sans elle, la table grossirait indefiniment
+    avec des masquages perimes que plus personne ne consulte.
+    """
+    ref = donnees_asof or ""
+    with get_conn() as conn:
+        rows = conn.execute("SELECT cle, donnees_asof FROM flags_masques").fetchall()
+        perimees = [r["cle"] for r in rows if (r["donnees_asof"] or "") != ref]
+        # Ecriture seulement s'il y a vraiment quelque chose a purger : cette
+        # fonction est appelee a chaque rendu du menu, donc a chaque rerun.
+        if perimees:
+            conn.executemany("DELETE FROM flags_masques WHERE cle = ?",
+                             [(c,) for c in perimees])
+        return {r["cle"] for r in rows if (r["donnees_asof"] or "") == ref}
 
 
 def anciennete_flags() -> dict[str, dict]:
