@@ -161,7 +161,8 @@ def _historiser_flags(config: AppConfig, asof: str) -> None:
         snaps = signals.construire_snapshots(config)
         flags = rules.tous_les_flags(config, snaps)
         db.enregistrer_flags(
-            [{"ticker": f.ticker, "regle": f.regle, "severite": f.severite} for f in flags],
+            [{"ticker": f.ticker, "regle": f.regle, "severite": f.severite, "detail": f.detail}
+             for f in flags],
             asof,
         )
     except Exception:

@@ -217,8 +217,14 @@ def fraicheur(kind: str) -> tuple[bool, str | None]:
 # definitive et une vraie degradation pourrait etre manquee.
 # ==========================================================================
 def flag_cle(f: dict) -> str:
-    """Identite d'un flag — la meme que celle historisee par db.enregistrer_flags."""
-    return f"{f['ticker']}|{f['regle']}|{f['severite']}"
+    """Identite d'un flag — la meme que celle historisee par db.enregistrer_flags.
+
+    `detail` distingue les flags d'une meme regle/severite pour un meme ticker
+    (ex : chute "seance" vs "drawdown_52s") : sans lui deux flags distincts
+    partagent la meme cle, ce qui casse le masquage et fait planter Streamlit
+    (cle de widget dupliquee) quand les deux sont affiches le meme jour.
+    """
+    return f"{f['ticker']}|{f['regle']}|{f.get('detail', '')}|{f['severite']}"
 
 
 def flag_est_nouveau(f: dict, anc: dict, asof: str | None) -> bool:
@@ -275,7 +281,20 @@ def rendre_menu_alertes(flags: list[dict]) -> None:
         # aussi mieux quand il y a dix alertes : on lit des tickers, pas de la
         # prose. Le detail reste affiche : un flag doit TOUJOURS montrer la
         # valeur observee et son seuil.
+        # Filet de securite : deux flags ne devraient jamais partager une cle
+        # (cf. Flag.detail dans rules.py), mais si une future regle l'oublie,
+        # un widget Streamlit duplique plante toute la page (StreamlitDuplicate
+        # ElementKey). On deduplique donc ici plutot que de laisser planter.
+        vues: set[str] = set()
+        a_afficher = []
         for f in alertes + infos:
+            cle = flag_cle(f)
+            if cle in vues:
+                continue
+            vues.add(cle)
+            a_afficher.append(f)
+
+        for f in a_afficher:
             cle = flag_cle(f)
             puce = "🔴" if f["severite"] == "alerte" else "🟡"
             neuf = "🆕 " if _nouveau(f) else ""
@@ -2070,7 +2089,8 @@ if btn_global:
 # alimentent le menu des alertes ci-dessous et le tri de « Ma synthese ».
 # Deterministe et local (lecture SQLite + pandas) : aucun appel reseau ni Claude.
 FLAGS_COURANTS = [
-    {"ticker": f.ticker, "regle": f.regle, "severite": f.severite, "message": f.message}
+    {"ticker": f.ticker, "regle": f.regle, "severite": f.severite, "message": f.message,
+     "detail": f.detail}
     for f in rules.tous_les_flags(config, signals.construire_snapshots(config))
 ]
 with alertes_slot:

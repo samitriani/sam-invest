@@ -25,6 +25,11 @@ class Flag:
     regle: str          # "chute" | "technique" | "degradation"
     severite: str       # "info" | "alerte"
     message: str        # explication chiffree
+    # Distingue les flags d'une meme regle qui peuvent cohabiter pour un meme
+    # ticker a la meme severite (ex : chute "seance" ET "drawdown_52s" le meme
+    # jour). Sans ca, ticker|regle|severite n'est pas unique et Streamlit plante
+    # sur une cle de widget dupliquee (StreamlitDuplicateElementKey).
+    detail: str = ""
 
 
 # ==========================================================================
@@ -39,11 +44,13 @@ def flags_chute(config: AppConfig, snaps: list[Snapshot]) -> list[Flag]:
         t = s.instrument.ticker
         if s.change_pct is not None and s.change_pct <= seuil_seance:
             flags.append(Flag(t, "chute", "alerte",
-                              f"{t} : {s.change_pct:+.1f}% sur la seance (seuil {seuil_seance:+.0f}%)."))
+                              f"{t} : {s.change_pct:+.1f}% sur la seance (seuil {seuil_seance:+.0f}%).",
+                              detail="seance"))
         if s.drawdown_pct is not None and s.drawdown_pct <= seuil_dd:
             flags.append(Flag(t, "chute", "alerte",
                               f"{t} : {s.drawdown_pct:+.1f}% depuis le plus-haut 52 semaines "
-                              f"(seuil {seuil_dd:+.0f}%)."))
+                              f"(seuil {seuil_dd:+.0f}%).",
+                              detail="drawdown_52s"))
     return flags
 
 
@@ -62,13 +69,16 @@ def flags_technique(config: AppConfig, snaps: list[Snapshot]) -> list[Flag]:
         t = s.instrument.ticker
         if s.rsi_etat == "survendu" and s.rsi_14 is not None:
             flags.append(Flag(t, "technique", "info",
-                              f"{t} : RSI 14 = {s.rsi_14:.0f} (< {survente:.0f}) — potentiellement survendu."))
+                              f"{t} : RSI 14 = {s.rsi_14:.0f} (< {survente:.0f}) — potentiellement survendu.",
+                              detail="rsi"))
         elif s.rsi_etat == "suracheté" and s.rsi_14 is not None:
             flags.append(Flag(t, "technique", "info",
-                              f"{t} : RSI 14 = {s.rsi_14:.0f} (> {surachat:.0f}) — potentiellement suracheté."))
+                              f"{t} : RSI 14 = {s.rsi_14:.0f} (> {surachat:.0f}) — potentiellement suracheté.",
+                              detail="rsi"))
         if s.position_52w_pct is not None and s.position_52w_pct <= proche_bas:
             flags.append(Flag(t, "technique", "info",
-                              f"{t} : proche du plus-bas 52s (position {s.position_52w_pct:.0f}% du range)."))
+                              f"{t} : proche du plus-bas 52s (position {s.position_52w_pct:.0f}% du range).",
+                              detail="proche_bas_52s"))
     return flags
 
 
@@ -83,7 +93,8 @@ def flags_degradation(config: AppConfig) -> list[Flag]:
         t = inst.ticker
         if not f:
             flags.append(Flag(t, "degradation", "info",
-                              f"{t} : fondamentaux indisponibles (n/d) — alarme non evaluable."))
+                              f"{t} : fondamentaux indisponibles (n/d) — alarme non evaluable.",
+                              detail="fondamentaux_nd"))
             continue
 
         rule = cfg.get("croissance_ca_min_pct", {}) or {}
@@ -91,30 +102,36 @@ def flags_degradation(config: AppConfig) -> list[Flag]:
             seuil = float(rule.get("seuil", 0))
             val = f.get("revenue_growth")
             if val is None:
-                flags.append(Flag(t, "degradation", "info", f"{t} : croissance du CA n/d."))
+                flags.append(Flag(t, "degradation", "info", f"{t} : croissance du CA n/d.",
+                                  detail="croissance_ca"))
             elif val < seuil:
                 flags.append(Flag(t, "degradation", "alerte",
-                                  f"{t} : croissance CA {val:+.1f}% < seuil {seuil:.0f}% — these a surveiller."))
+                                  f"{t} : croissance CA {val:+.1f}% < seuil {seuil:.0f}% — these a surveiller.",
+                                  detail="croissance_ca"))
 
         rule = cfg.get("marge_nette_min_pct", {}) or {}
         if rule.get("actif"):
             seuil = float(rule.get("seuil", 0))
             val = f.get("net_margin")
             if val is None:
-                flags.append(Flag(t, "degradation", "info", f"{t} : marge nette n/d."))
+                flags.append(Flag(t, "degradation", "info", f"{t} : marge nette n/d.",
+                                  detail="marge_nette"))
             elif val < seuil:
                 flags.append(Flag(t, "degradation", "alerte",
-                                  f"{t} : marge nette {val:.1f}% < seuil {seuil:.0f}%."))
+                                  f"{t} : marge nette {val:.1f}% < seuil {seuil:.0f}%.",
+                                  detail="marge_nette"))
 
         rule = cfg.get("dette_sur_capitaux_max", {}) or {}
         if rule.get("actif"):
             seuil = float(rule.get("seuil", 0))
             val = f.get("debt_to_equity")
             if val is None:
-                flags.append(Flag(t, "degradation", "info", f"{t} : ratio dette/capitaux n/d."))
+                flags.append(Flag(t, "degradation", "info", f"{t} : ratio dette/capitaux n/d.",
+                                  detail="dette_capitaux"))
             elif val > seuil:
                 flags.append(Flag(t, "degradation", "alerte",
-                                  f"{t} : dette/capitaux {val:.2f} > seuil {seuil:.2f}."))
+                                  f"{t} : dette/capitaux {val:.2f} > seuil {seuil:.2f}.",
+                                  detail="dette_capitaux"))
     return flags
 
 

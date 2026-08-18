@@ -386,12 +386,15 @@ def enregistrer_flags(flags: list[dict], asof: str) -> None:
     """Historise les flags courants pour distinguer 'nouveau' et 'persistant'.
 
     A appeler UNE fois par mise a jour des donnees (jamais a chaque rerun UI).
-    `flags` = [{ticker, regle, severite}, ...]. Un flag est identifie par
-    'ticker|regle|severite'. Un flag deja connu conserve sa premiere_vue ; un
-    flag absent du lot courant est purge (sa reapparition future le remarquera
-    'nouveau'). `derniere_vue` = asof de cette mise a jour des donnees.
+    `flags` = [{ticker, regle, detail, severite}, ...]. Un flag est identifie par
+    'ticker|regle|detail|severite' (meme formule que app.flag_cle : `detail`
+    distingue les flags d'une meme regle/severite pour un meme ticker, ex.
+    chute "seance" vs "drawdown_52s"). Un flag deja connu conserve sa
+    premiere_vue ; un flag absent du lot courant est purge (sa reapparition
+    future le remarquera 'nouveau'). `derniere_vue` = asof de cette mise a
+    jour des donnees.
     """
-    cles = {f"{f['ticker']}|{f['regle']}|{f['severite']}": f for f in flags}
+    cles = {f"{f['ticker']}|{f['regle']}|{f.get('detail', '')}|{f['severite']}": f for f in flags}
     with get_conn() as conn:
         existants = {r["cle"] for r in conn.execute("SELECT cle FROM flags_seen").fetchall()}
         for cle, f in cles.items():
