@@ -99,8 +99,35 @@ range en deux groupes :
 
 **Ma liste** et **Aide** restent hors groupe, en haut et en bas du menu : la
 premiere parce qu'elle configure l'outil, la seconde parce qu'elle le documente.
-Le menu contient aussi **« Tout mettre a jour »**, **« Exporter (.md) »**, la
-fraicheur des donnees et **toutes les alertes** (voir juste en dessous).
+Le menu contient aussi les **trois boutons de mise a jour** (voir juste en
+dessous), **« ⬇️ Exporter (.md) »**, la fraicheur des donnees et **toutes les
+alertes**.
+
+### Trois boutons de mise a jour, dans le menu ☰, jamais sur une page
+
+Ils sont **en haut du menu**, toujours au meme endroit quelle que soit la page
+ouverte, du moins cher au plus cher :
+
+- **🔄 MAJ page courante** — actualise uniquement ce qu'affiche la page
+  ouverte : cours sur *Cours de bourse* / *Calendrier des evenements*,
+  actualites sur *News* (Claude Haiku), ou juste l'entreprise affichee sur
+  *Vue entreprise* (plus rapide qu'une mise a jour complete). Grise sur les
+  pages sans donnees de marche a rafraichir (*Ma liste*, *Ma synthese*,
+  *Analyser*, *Aide*).
+- **🔄 Mettre a jour les donnees** — cours + actualites pour **toute** la
+  watchlist (Claude Haiku pour les news). N'ecrit jamais la synthese.
+- **🔄 Mettre a jour donnees et analyse** — le meme rafraichissement complet,
+  puis **1 appel Sonnet** qui ecrit la synthese globale et par instrument.
+  C'est le bouton le plus cher : ~3 a 4 min, l'app doit rester ouverte. Un
+  garde-fou evite de payer deux fois — si les cours et les actualites n'ont pas
+  change depuis la derniere ecriture, le texte deja genere est repris sans
+  nouvel appel.
+
+Avant, chaque page portait son propre bouton (*Actualiser les cours*,
+*Actualiser les actualites*, *Ecrire ma synthese*) et le menu avait un
+*« Tout mettre a jour »* separe. Regrouper les trois actions au meme endroit
+evite de chercher le bon bouton selon la page, et rend visible d'un coup d'œil
+ce que chacune coute.
 
 ### Les alertes vivent dans le menu ☰, nulle part ailleurs
 
@@ -130,15 +157,13 @@ porte le compte (« 🔔 3 alertes ») pour etre lisible sans l'ouvrir :
   Sonnet, a la demande)_ : pairs Finnhub + suggestions thematiques, chaque
   candidat valide et chiffre par le code avant affichage.
 - **📈 Cours de bourse** — *« Quoi de neuf ? »* C'est l'accueil, parce que c'est la
-  question qu'on se pose en ouvrant l'app. Tableau des cours et signaux (*Actions*
-  / *ETF*, sections pliables). Bouton *Actualiser les cours* (gratuit).
+  question qu'on se pose en ouvrant l'app. Tableau des cours et signaux
+  (*Actions* / *ETF*, sections pliables).
 - **📅 Calendrier des evenements** — *« Qu'est-ce qui arrive ? »* Resultats et
   ex-dividende a venir, revisions d'estimations et **consensus analystes**, en
-  deux tableaux pliables. Meme bouton *Actualiser les cours* (gratuit) : la page
-  se suffit a elle-meme.
+  deux tableaux pliables.
 - **📰 News** — *« Qu'est-ce qui s'est dit ? »* Le **fil des actualites
-  recentes**, tous instruments confondus, du plus recent au plus ancien. Bouton
-  *Actualiser les actualites* (Claude Haiku pour le classement et la traduction).
+  recentes**, tous instruments confondus, du plus recent au plus ancien.
 - **🔎 Vue entreprise** — *« Je creuse celle-ci. »* Le detail d'UNE valeur **suivie** :
   *son cours* (graphique + indicateurs), *ses chiffres cles*, *ce qu'en disent les
   analystes*, *ses actualites*. Tout sort de la base locale — donc uniquement pour
@@ -148,11 +173,10 @@ porte le compte (« 🔔 3 alertes ») pour etre lisible sans l'ouvrir :
   **3 parties** — chiffres, actualites, conclusion & arguments — plus une
   **recommandation ACHAT / GARDER / VENDRE** en badge, visible dans le titre sans
   avoir a l'ouvrir. Un seul appel Sonnet couvre le global ET tous les instruments.
-  Le bouton **« Ecrire ma synthese »** fait tout le necessaire en un geste : si les
-  cours ou les actualites datent de plus de deux heures, il les actualise d'abord
-  et son libelle le dit _(« Actualiser cours + actualites puis ecrire ma
-  synthese »)_. Compte 2 a 4 min selon le cas, app ouverte. Le texte obtenu est
-  ecrit en base : une coupure ne le perd pas, et un autre appareil le retrouve.
+  La page elle-meme n'a plus de bouton : c'est **« 🔄 Mettre a jour donnees et
+  analyse »**, dans le menu ☰, qui rafraichit et ecrit la synthese. Le texte
+  obtenu est ecrit en base : une coupure ne le perd pas, et un autre appareil
+  le retrouve.
 - **🔬 Analyser** — *« Cette boite vaut-elle quelque chose ? »* **Portee differente :
   toute entreprise cotee, suivie ou non.** Recherche libre (tes valeurs et tes
   analyses passees sont proposees en raccourci), puis une analyse financiere en
@@ -171,9 +195,6 @@ porte le compte (« 🔔 3 alertes ») pour etre lisible sans l'ouvrir :
 La recommandation est une heuristique de lecture produite par Claude, **pas un
 conseil en investissement** — la mise en garde est affichee **au-dessus** du badge,
 pour etre lue avant lui. La decision reste humaine.
-
-Le bouton **« Tout mettre a jour »** (dans le menu ☰) fait cours + actualites, mais
-jamais la synthese Sonnet (declenchee uniquement par son bouton dedie).
 
 _L'analyse approfondie suit le deroule en etapes de la methode d'analyse financiere
 de **Veronique Nguyen** (l'app s'est longtemps appelee « VN Diagnostic »)._
@@ -231,8 +252,8 @@ zero serveur a gerer, deploiement direct depuis GitHub.
 4. Choisis la version Python la plus recente proposee (3.11/3.12) dans les
    parametres avances si demande.
 5. Deploie, attends l'installation de `requirements.txt`, puis ouvre l'URL et
-   clique **« Tout mettre a jour »** pour verifier que yfinance/Finnhub
-   repondent bien depuis le cloud.
+   clique **« 🔄 Mettre a jour les donnees »** (menu ☰) pour verifier que
+   yfinance/Finnhub repondent bien depuis le cloud.
 6. Optionnel mais recommande : **Settings → Sharing** → restreins l'acces a ton
    seul email, pour eviter qu'une URL publique fasse consommer ton credit
    Claude par un tiers.
@@ -240,8 +261,8 @@ zero serveur a gerer, deploiement direct depuis GitHub.
 **A savoir (compromis du plan gratuit, acceptes pour un usage perso simple) :**
 - Le disque est **reinitialise a chaque redeploiement** (nouveau `git push`) et
   parfois apres une longue inactivite : la base `data/sam_invest.db` (cache
-  prix/news/fondamentaux) est perdue — reclique juste sur « Tout mettre a jour »,
-  tout est re-telechargeable, rien n'est perdu de facon permanente.
+  prix/news/fondamentaux) est perdue — reclique juste sur « 🔄 Mettre a jour
+  les donnees », tout est re-telechargeable, rien n'est perdu de facon permanente.
 - Si tu modifies la watchlist **depuis l'app en ligne**, ce changement ne
   survivra PAS au prochain redeploiement : utilise le bouton **« ⬇️ Telecharger
   config.yaml »** (page Ma liste) juste apres modification, puis remplace le

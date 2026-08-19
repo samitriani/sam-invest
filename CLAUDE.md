@@ -126,8 +126,11 @@ config.yaml ──> config.load_config() ──> AppConfig (watchlist + regles +
                                               └──> llm.synthese_et_reco (Sonnet, streaming)
 ```
 
-`update.update_global` = donnees + news. Il ne declenche **jamais** la synthese
-Sonnet : seul son bouton dedie le fait.
+`update.update_global` = donnees + news. La fonction elle-meme ne declenche
+**jamais** la synthese Sonnet ; c'est l'UI (`app.py`) qui enchaine
+`update_global` puis `ecrire_synthese` quand on clique sur « Mettre a jour
+donnees et analyse » — deux appels distincts, pas une fusion des deux
+fonctions.
 
 **Chaine de repli des sources** : yfinance d'abord (gratuit, sans cle), puis
 Finnhub, puis FMP — pour menager les quotas. Regle d'or de `data_sources.py` :
@@ -141,8 +144,8 @@ indisponible en aval.
 
 | Modele | Appele par | Quand | Ce qu'il produit |
 |---|---|---|---|
-| Haiku | `llm.classer_news` | bouton « Actualiser les actualites » | categorie, tonalite, resume FR, traduction du titre |
-| Sonnet | `llm.synthese_et_reco` | bouton « Ecrire ma synthese » | 1 SEUL appel pour le global + tous les instruments |
+| Haiku | `llm.classer_news` | menu ☰ : « MAJ page courante » (sur News) ou « Mettre a jour les donnees » | categorie, tonalite, resume FR, traduction du titre |
+| Sonnet | `llm.synthese_et_reco` | menu ☰ : « Mettre a jour donnees et analyse » | 1 SEUL appel pour le global + tous les instruments |
 | Sonnet | `llm.generer_idees_thematiques` | bouton « Generer des suggestions » | tickers candidats (texte seul, valides ensuite par le code) |
 | Opus | `llm.conclusion_etape_stream`, `llm.exec_summary_diagnostic_stream` | bouton « Analyser » | conclusion par etape + executive summary |
 
@@ -195,6 +198,15 @@ par page, puis la navigation en fin de fichier.
   Streamlit en tete du menu, avant les sections nommees — c'est elle qui porte
   `Ma liste` ; `Aide` recoit sa propre section a un seul element pour rester en
   bas (Streamlit ne permet pas deux sections sans en-tete dans un seul menu).
+- **Trois boutons de mise a jour, dans le menu ☰, jamais sur une page** : « MAJ
+  page courante » (cible la page ouverte via `navigation.title`, lu **avant**
+  `navigation.run()` — desactive sur les pages hors groupe Donnees), « Mettre a
+  jour les donnees » (`update_global` : cours + news, jamais la synthese) et
+  « Mettre a jour donnees et analyse » (`update_global` puis `ecrire_synthese`,
+  desactive sans `ANTHROPIC_API_KEY`). Les trois s'executent **avant**
+  `navigation.run()`, comme les alertes, pour que la page rendue reflete deja
+  les donnees fraiches sans `st.rerun()`. Aucune page ne porte plus son propre
+  bouton d'actualisation — les eviter y ferait doublon.
 - **Watchlist vide** -> `ecran_demarrage()` court-circuite la navigation. Ne pas
   afficher un menu et des tableaux vides a quelqu'un qui decouvre l'outil.
 - **Mobile d'abord** : usage principal = telephone. Les durees et les couts sont
@@ -336,8 +348,8 @@ meme format** qui reproduit le cas d'origine, avec le contexte en docstring.
 6. **`st.expander` ne s'imbrique pas** : les suggestions sont une *section* et
    non un expander, parce qu'elles contiennent deja un expander par candidat.
 7. **`st.rerun()` efface tout ce qui a ete ecrit pendant le run.** Les messages a
-   montrer apres une generation transitent par `st.session_state`
-   (`synthese_messages`) et sont rejoues au run suivant.
+   montrer apres une action transitent par `st.session_state` (ex. `wl_flash_ok`,
+   `idees_doublons_flash`) et sont rejoues au run suivant.
 8. **Streamlit Cloud reinitialise le disque** a chaque redeploiement : la base est
    perdue (tout est re-telechargeable), et une watchlist modifiee **en ligne** ne
    survit pas — d'ou le bouton « ⬇️ Telecharger config.yaml » de la page Ma liste.
