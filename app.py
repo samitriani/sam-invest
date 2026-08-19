@@ -4,23 +4,36 @@ Outil de WATCHLIST : on surveille des instruments (on ne possede rien ici).
 Aucune planification, aucun cron : tout se declenche par les boutons.
 
 UX MOBILE D'ABORD (usage principal : telephone, en transports) :
-  - Navigation en MENU BURGER (st.navigation, sidebar repliee) : une seule page
-    rendue par run -> page legere, et l'URL porte la page courante donc une
-    reconnexion revient exactement ou on etait (les onglets, eux, revenaient au 1er).
-  - Textes explicatifs regroupes dans la page "A propos" : les pages de travail
-    ne gardent qu'une ligne de contexte.
+  - Navigation en MENU BURGER (st.navigation, sidebar repliee), rangee en deux
+    niveaux : un groupe "Donnees" et un groupe "Analyse IA", plus "Ma liste" et
+    "Aide" hors groupe. Une seule page rendue par run -> page legere, et l'URL
+    porte la page courante donc une reconnexion revient exactement ou on etait
+    (les onglets, eux, revenaient au 1er).
+  - Textes explicatifs regroupes dans la page "Aide" : les pages de travail ne
+    gardent qu'une ligne de contexte.
   - Tout ce qui coute cher (briefing Sonnet, diagnostic Opus) est PERSISTE EN BASE,
     pas en session : une coupure reseau ne fait jamais perdre un resultat.
 
-Quatre pages, nommees par la QUESTION a laquelle elles repondent plutot que par
+Huit pages, nommees par la QUESTION a laquelle elles repondent plutot que par
 l'etage du pipeline qui les alimente. Chacune porte son bouton de mise a jour,
 plus une mise a jour globale dans le menu (consommation d'API maitrisee).
-  - Aujourd'hui    : cours + signaux + echeances, puis le fil d'actualites
-                     (Haiku pour le classement). Les cours sont gratuits.
-  - Ma liste       : edition de la liste + suggestions d'ajout (Sonnet, au clic).
-  - Une entreprise : la fiche complete d'UNE valeur — cours, actualites, chiffres,
-                     analystes — puis l'analyse approfondie (Opus, au clic).
-  - Ma synthese    : la lecture redigee par Claude, et elle seule (Sonnet, au clic).
+  - Ma liste                  : edition de la liste + suggestions d'ajout
+                                 (Sonnet, au clic). Hors groupe.
+  - Cours de bourse           : cours + signaux de tes valeurs. Page par
+                                 defaut. Groupe Donnees, gratuit.
+  - Calendrier des evenements : echeances resultats/ex-dividende, revisions
+                                 d'estimations. Groupe Donnees, gratuit.
+  - News                      : fil chronologique des actualites (Haiku pour
+                                 le classement). Groupe Donnees.
+  - Vue entreprise             : la fiche complete d'UNE valeur suivie — cours,
+                                 actualites, chiffres, analystes. Groupe Donnees.
+  - Ma synthese                : la lecture redigee par Claude, et elle seule
+                                 (Sonnet, au clic). Groupe Analyse IA.
+  - Analyser                   : l'analyse approfondie de toute entreprise
+                                 cotee, suivie ou non (Opus, au clic). Groupe
+                                 Analyse IA.
+  - Aide                       : toutes les explications de l'application. Hors
+                                 groupe.
 
 Les alertes (deterministes, gratuites) ne vivent sur aucune page : elles sont
 rassemblees dans le menu ☰, avec une croix par alerte et un « Tout supprimer ».
@@ -562,7 +575,7 @@ def rendre_news(n: dict, a: dict | None = None, compact: bool = False) -> None:
 
 
 # --------------------------------------------------------------------------
-# ACTUALITES : un fil date sur "Aujourd'hui", un bloc sur la fiche entreprise
+# ACTUALITES : un fil date sur "News", un bloc sur la fiche entreprise
 # --------------------------------------------------------------------------
 # L'ancienne page News redressait une SECONDE liste de la watchlist, un volet
 # par valeur. Les actualites ne sont pas une facon d'enumerer le portefeuille :
@@ -585,7 +598,7 @@ def bloc_news_entreprise(ticker: str) -> None:
     raw = db.get_news(ticker)
     if not raw:
         st.caption("Aucune actualite en base pour cette entreprise. "
-                   "Lance « Actualiser les actualites » sur Aujourd'hui.")
+                   "Lance « Actualiser les actualites » sur News.")
         return
     analyses = _analyses_news(ticker)
     for i, n in enumerate(raw):
@@ -634,14 +647,13 @@ def titre_page(icone: str, titre: str, accroche: str) -> None:
 # --------------------------------------------------------------------------
 # PAGE DONNEES : prix + fondamentaux + signaux (aucun appel Claude)
 # --------------------------------------------------------------------------
-def page_donnees():
-    titre_page("📈", "Aujourd'hui", "Ce qui a bouge sur tes valeurs, et l'actualite du jour.")
+def page_cours():
+    titre_page("📈", "Cours de bourse", "Ce qui a bouge aujourd'hui sur tes valeurs suivies.")
     if st.button("🔄 Actualiser les cours", use_container_width=True,
                  disabled=not config.watchlist):
         afficher_compte_rendu(run_update(update_donnees, "Mise a jour des donnees"))
     caption_derniere_maj("donnees", "cours")
 
-    st.subheader("Mes valeurs")
     snaps = signals.construire_snapshots(config)
 
     def _row(s) -> dict:
@@ -685,13 +697,23 @@ def page_donnees():
     else:
         st.warning("Aucune valeur suivie : ajoute-en dans « Ma liste ».")
 
-    # --- A venir (resultats / ex-dividende) + Estimations (actions) ---
-    # Streamlit interdit d'imbriquer un expander dans un expander : « A venir &
-    # estimations » reste donc un titre, et ses deux tableaux sont chacun pliables.
+
+# --------------------------------------------------------------------------
+# PAGE CALENDRIER : echeances resultats/ex-div + estimations (aucun appel Claude)
+# --------------------------------------------------------------------------
+def page_calendrier():
+    titre_page("📅", "Calendrier des evenements",
+               "Resultats et ex-dividende a venir, revisions d'estimations et consensus.")
+    if st.button("🔄 Actualiser les cours", use_container_width=True,
+                 disabled=not config.watchlist):
+        afficher_compte_rendu(run_update(update_donnees, "Mise a jour des donnees"))
+    caption_derniere_maj("donnees", "cours")
+
+    # Streamlit interdit d'imbriquer un expander dans un expander : les deux
+    # tableaux sont chacun pliables, cote a cote sur la page plutot que dans
+    # un expander parent.
     vues = construire_evenements(config)
     if vues:
-        st.subheader("📅 A venir & estimations (actions)")
-
         def _jours(j):
             if j is None:
                 return "n/d"
@@ -750,9 +772,17 @@ def page_donnees():
             )
         st.caption("Actions uniquement (survole les en-tetes pour la definition de chaque "
                    "colonne).")
+    elif not config.watchlist:
+        st.warning("Aucune valeur suivie : ajoute-en dans « Ma liste ».")
+    else:
+        st.caption("Aucune echeance a venir pour tes valeurs suivies.")
 
-    # --- Actualites du jour (ex-page News) ---
-    st.subheader("📰 Actualites recentes")
+
+# --------------------------------------------------------------------------
+# PAGE NEWS : fil chronologique des actualites (Haiku pour le classement)
+# --------------------------------------------------------------------------
+def page_news():
+    titre_page("📰", "News", "Le fil des actualites recentes de tes valeurs suivies.")
     if st.button("🔄 Actualiser les actualites", use_container_width=True,
                  disabled=not config.watchlist):
         afficher_compte_rendu(run_update(update_news, "Mise a jour des news"))
@@ -839,7 +869,7 @@ def bloc_marche(choix: str) -> None:
             ("Plus-haut 52s", _fmt(ind["high_52w"])),
         ])
     else:
-        st.caption("Pas encore d'historique. Lance « Actualiser les cours » sur Aujourd'hui.")
+        st.caption("Pas encore d'historique. Lance « Actualiser les cours » sur Cours de bourse.")
 
     # --- Sous-partie 2 : fondamentaux ---
     st.markdown("#### Ses chiffres cles")
@@ -853,7 +883,7 @@ def bloc_marche(choix: str) -> None:
 
 
 def page_instrument():
-    titre_page("🔎", "Une entreprise",
+    titre_page("🔎", "Vue entreprise",
                "Le detail d'une valeur que tu suis : cours, chiffres, actualites.")
     noms = {i.ticker: i.nom for i in config.watchlist}
     if not noms:
@@ -1347,7 +1377,7 @@ def section_analyse(ticker: str) -> None:
 # --------------------------------------------------------------------------
 # PAGE ANALYSER : l'analyse financiere de N'IMPORTE QUELLE entreprise cotee
 # --------------------------------------------------------------------------
-# Portee volontairement DIFFERENTE de « Une entreprise » : ici on explore le
+# Portee volontairement DIFFERENTE de « Vue entreprise » : ici on explore le
 # marche entier, sans rien supposer d'une watchlist. Aucune donnee locale n'est
 # requise — les comptes sont recuperes en direct. C'est aussi ce qui alimente la
 # decision de suivre une valeur : d'ou le bouton d'ajout apres l'analyse.
@@ -1843,19 +1873,27 @@ def page_about():
             "generations Claude en ont besoin."
         )
 
-    with st.expander("📄 Les cinq pages"):
+    with st.expander("📄 Les pages"):
         st.markdown(
-            "Quatre pages parlent des valeurs **que tu suis**. La cinquieme, "
-            "**Analyser**, s'applique a **n'importe quelle entreprise cotee** — "
-            "c'est la difference de portee qui justifie qu'elle soit a part.\n\n"
-            "**📈 Aujourd'hui** — Ce qui a bouge sur tes valeurs : cours et signaux, "
-            "echeances a venir, puis le fil des actualites recentes. C'est la page "
-            "d'accueil parce que c'est la question qu'on se pose en ouvrant l'app.\n\n"
-            "**✏️ Ma liste** — Les valeurs que tu suis : ajouter, retirer, "
-            "re-thematiser, et les suggestions d'ajout. C'est par la qu'on commence.\n\n"
-            "**🔎 Une entreprise** — Le detail d'UNE valeur suivie : son cours, ses "
+            "Le menu est range en deux groupes. **Donnees** ne fait aucun appel "
+            "Claude couteux (juste Haiku pour classer les news) ; **Analyse IA** "
+            "regroupe les deux pages qui font ecrire Claude. « Ma liste » et "
+            "« Aide » restent hors groupe, en haut et en bas du menu.\n\n"
+            "**✏️ Ma liste** (hors groupe) — Les valeurs que tu suis : ajouter, "
+            "retirer, re-thematiser, et les suggestions d'ajout. C'est par la "
+            "qu'on commence.\n\n"
+            "**Groupe Donnees** — les valeurs **que tu suis**, cote marche :\n\n"
+            "**📈 Cours de bourse** — Ce qui a bouge sur tes valeurs : cours et "
+            "signaux. C'est la page d'accueil parce que c'est la question qu'on "
+            "se pose en ouvrant l'app.\n\n"
+            "**📅 Calendrier des evenements** — Resultats et ex-dividende a venir, "
+            "revisions d'estimations et consensus des analystes.\n\n"
+            "**📰 News** — Le fil chronologique des actualites, toutes tes valeurs "
+            "confondues.\n\n"
+            "**🔎 Vue entreprise** — Le detail d'UNE valeur suivie : son cours, ses "
             "chiffres cles, l'avis des analystes, ses actualites. Tout vient de la "
             "base locale, donc uniquement pour les valeurs de ta liste.\n\n"
+            "**Groupe Analyse IA** — les deux pages qui font ecrire Claude :\n\n"
             "**🧠 Ma synthese** — La lecture d'ensemble de tes valeurs, ecrite par "
             "Claude, avec une recommandation par valeur.\n\n"
             "**🔬 Analyser** — L'analyse financiere complete de **toute entreprise "
@@ -1863,9 +1901,11 @@ def page_about():
             "valeur, solidite, cash, croissance, valorisation) puis une conclusion "
             "ecrite. Rien n'a besoin d'etre en base : les comptes sont recuperes en "
             "direct. C'est aussi la page ou l'on decide de suivre une valeur — le "
-            "bouton d'ajout est juste sous l'analyse.\n\n"
+            "bouton d'ajout est juste sous l'analyse. Portee differente des autres "
+            "pages : n'importe quelle entreprise cotee, pas seulement ta liste.\n\n"
             "_Le deroule en etapes suit la methode d'analyse financiere de "
-            "**Veronique Nguyen**._"
+            "**Veronique Nguyen**._\n\n"
+            "**ℹ️ Aide** (hors groupe) — cette page."
         )
 
     with st.expander("🎨 Codes couleur et symboles"):
@@ -2025,27 +2065,44 @@ if not config.watchlist:
     st.stop()
 
 
-# Chaque page est nommee par la QUESTION a laquelle elle repond, et l'ordre suit
-# celui dans lequel on s'en sert : quoi de neuf, ce que je suis, une valeur en
-# particulier, la lecture d'ensemble — puis l'exploration hors watchlist.
+# Menu a deux niveaux : un groupe "Donnees" (aucun appel Claude cher, juste
+# Haiku pour les news) et un groupe "Analyse IA" (Sonnet / Opus, au clic).
+# "Ma liste" et "Aide" restent hors groupe : ce ne sont pas des lectures de
+# marche, la premiere parce qu'elle configure l'outil, la seconde parce
+# qu'elle documente l'outil. st.navigation place la section a cle vide en
+# tete du menu, avant les sections nommees (voir doc Streamlit) : elle porte
+# donc "Ma liste" pour qu'on la retrouve d'emblee en ouvrant le menu.
 #
 # Defini avant PAGES : page_instrument y renvoie via st.page_link, et les pages
 # ne sont rendues qu'apres navigation.run(), donc la variable existe a temps.
 PAGE_ANALYSER = st.Page(page_analyser, title="Analyser", icon="🔬",
                         url_path="analyser")
 
-PAGES = [
-    # Page par defaut : Streamlit la sert a la racine « / » (son url_path n'est pas
-    # utilise dans les liens). C'est elle qu'on retrouve apres une reconnexion sans
-    # chemin explicite.
-    st.Page(page_donnees, title="Aujourd'hui", icon="📈", url_path="aujourdhui", default=True),
-    st.Page(page_watchlist, title="Ma liste", icon="✏️", url_path="ma-liste"),
-    st.Page(page_instrument, title="Une entreprise", icon="🔎", url_path="entreprise"),
-    st.Page(page_briefing, title="Ma synthese", icon="🧠", url_path="synthese"),
-    # Portee differente des quatre precedentes : tout le marche, pas la watchlist.
-    PAGE_ANALYSER,
-    st.Page(page_about, title="Aide", icon="ℹ️", url_path="aide"),
-]
+PAGES = {
+    "": [
+        st.Page(page_watchlist, title="Ma liste", icon="✏️", url_path="ma-liste"),
+    ],
+    "Donnees": [
+        # Page par defaut : Streamlit la sert a la racine « / » (son url_path
+        # n'est pas utilise dans les liens). C'est elle qu'on retrouve apres
+        # une reconnexion sans chemin explicite.
+        st.Page(page_cours, title="Cours de bourse", icon="📈", url_path="cours",
+                default=True),
+        st.Page(page_calendrier, title="Calendrier des evenements", icon="📅",
+                url_path="calendrier"),
+        st.Page(page_news, title="News", icon="📰", url_path="news"),
+        st.Page(page_instrument, title="Vue entreprise", icon="🔎", url_path="entreprise"),
+    ],
+    "Analyse IA": [
+        st.Page(page_briefing, title="Ma synthese", icon="🧠", url_path="synthese"),
+        # Portee differente des autres pages de ce groupe : tout le marche,
+        # pas seulement la watchlist.
+        PAGE_ANALYSER,
+    ],
+    "Aide": [
+        st.Page(page_about, title="Aide", icon="ℹ️", url_path="aide"),
+    ],
+}
 navigation = st.navigation(PAGES, position="sidebar")
 
 # Le menu accueille aussi les actions globales : sur telephone, elles n'ont pas
@@ -2055,8 +2112,8 @@ with st.sidebar:
     st.caption("Mes valeurs, suivies au jour le jour")
     st.divider()
     # Les alertes AVANT les actions : en ouvrant le menu on lit d'abord ce qui
-    # ne va pas, on agit ensuite. C'est la meme logique qui fait d'« Aujourd'hui »
-    # la page par defaut. Placees plus bas, elles tombaient sous la ligne de
+    # ne va pas, on agit ensuite. C'est la meme logique qui fait de « Cours de
+    # bourse » la page par defaut. Placees plus bas, elles tombaient sous la ligne de
     # flottaison d'un ecran de telephone et il fallait scroller pour les voir.
     # L'emplacement est reserve ici mais REMPLI plus bas, apres l'eventuelle mise
     # a jour globale : sinon le menu afficherait les flags d'avant l'actualisation.

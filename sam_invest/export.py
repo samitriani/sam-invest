@@ -3,7 +3,7 @@
 Assemble en un seul fichier .md, pensé pour etre recolle a Claude ensuite :
   - metadonnees (date d'export, devise, horodatage des dernieres MAJ) ;
   - une legende des codes maison (flags, RSI, ⚠️) que Claude ne devine pas ;
-  - Aujourd'hui : tableau signaux (actions/ETF) + calendrier & estimations ;
+  - Donnees : tableau signaux (actions/ETF) + calendrier & estimations ;
   - actualites : brutes + classement Haiku (categorie/tonalite/traduction) ;
   - Ma synthese : synthese globale + analyse 3 parties + reco par instrument ;
   - analyse approfondie : la plus recente (si realisee) ;

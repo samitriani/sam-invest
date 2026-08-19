@@ -82,18 +82,25 @@ On coche deux ou trois entreprises, on clique **« Ajouter et commencer »**, et
 menu complet apparait. Montrer une machine a l'arret est le meilleur moyen de
 perdre quelqu'un qui decouvre l'outil.
 
-### 5 pages dans le menu ☰ (+ actions globales dans ce meme menu)
+### 8 pages dans un menu a deux niveaux ☰ (+ actions globales dans ce meme menu)
 La navigation est un **menu burger** (icone ☰ en haut a gauche sur telephone ; menu
 lateral deplie sur grand ecran). Une seule page est chargee a la fois — page legere
 sur mobile — et **l'adresse porte la page courante**, donc une coupure de connexion
 suivie d'une reconnexion ramene exactement ou on etait.
 
-Chaque page est nommee par la **question a laquelle elle repond**. Les quatre
-premieres parlent des valeurs **que tu suis** ; la cinquieme, **Analyser**,
-s'applique a **n'importe quelle entreprise cotee** — c'est cette difference de
-**portee** qui justifie qu'elle soit a part. Le menu contient aussi
-**« Tout mettre a jour »**, **« Exporter (.md) »**, la fraicheur des donnees et
-**toutes les alertes** (voir juste en dessous).
+Chaque page est nommee par la **question a laquelle elle repond**, et le menu est
+range en deux groupes :
+- **Donnees** — tout ce qui vient du marche pour tes valeurs suivies, sans appel
+  Claude couteux (juste Haiku pour classer les news) : *Cours de bourse*,
+  *Calendrier des evenements*, *News*, *Vue entreprise*.
+- **Analyse IA** — les deux pages qui font ecrire Claude : *Ma synthese* (Sonnet)
+  et *Analyser* (Opus). **Analyser** a une portee differente des sept autres
+  pages : **n'importe quelle entreprise cotee**, pas seulement celles que tu suis.
+
+**Ma liste** et **Aide** restent hors groupe, en haut et en bas du menu : la
+premiere parce qu'elle configure l'outil, la seconde parce qu'elle le documente.
+Le menu contient aussi **« Tout mettre a jour »**, **« Exporter (.md) »**, la
+fraicheur des donnees et **toutes les alertes** (voir juste en dessous).
 
 ### Les alertes vivent dans le menu ☰, nulle part ailleurs
 
@@ -116,20 +123,23 @@ porte le compte (« 🔔 3 alertes ») pour etre lisible sans l'ouvrir :
 - Le masquage est enregistre en base : il survit a un rechargement de page et se
   retrouve depuis un autre appareil.
 
-- **📈 Aujourd'hui** — *« Quoi de neuf ? »* C'est l'accueil, parce que c'est la
+- **✏️ Ma liste** — *« Qu'est-ce que je suis ? »* Hors groupe, en haut du menu
+  parce que c'est par la qu'on commence. Recherche par nom (« air liquide » →
+  `AI.PA`, la cotation principale sortant toujours en tete), edition ligne par
+  ligne (nom, type, theme, retrait 🗑️) et **💡 Suggestions d'ajout** _(Claude
+  Sonnet, a la demande)_ : pairs Finnhub + suggestions thematiques, chaque
+  candidat valide et chiffre par le code avant affichage.
+- **📈 Cours de bourse** — *« Quoi de neuf ? »* C'est l'accueil, parce que c'est la
   question qu'on se pose en ouvrant l'app. Tableau des cours et signaux (*Actions*
-  / *ETF*, sections pliables), section **« A venir & estimations »** avec le
-  consensus analystes, puis le **fil des actualites recentes**, tous instruments
-  confondus, du plus recent au plus ancien. Deux boutons : *Actualiser les cours*
-  (gratuit) et *Actualiser les actualites* (Claude Haiku pour le classement et la
-  traduction).
-- **✏️ Ma liste** — *« Qu'est-ce que je suis ? »* Placee en deuxieme parce que
-  c'est par la qu'on commence. Recherche par nom (« air liquide » → `AI.PA`, la
-  cotation principale sortant toujours en tete), edition ligne par ligne (nom,
-  type, theme, retrait 🗑️) et **💡 Suggestions d'ajout** _(Claude Sonnet, a la
-  demande)_ : pairs Finnhub + suggestions thematiques, chaque candidat valide et
-  chiffre par le code avant affichage.
-- **🔎 Une entreprise** — *« Je creuse celle-ci. »* Le detail d'UNE valeur **suivie** :
+  / *ETF*, sections pliables). Bouton *Actualiser les cours* (gratuit).
+- **📅 Calendrier des evenements** — *« Qu'est-ce qui arrive ? »* Resultats et
+  ex-dividende a venir, revisions d'estimations et **consensus analystes**, en
+  deux tableaux pliables. Meme bouton *Actualiser les cours* (gratuit) : la page
+  se suffit a elle-meme.
+- **📰 News** — *« Qu'est-ce qui s'est dit ? »* Le **fil des actualites
+  recentes**, tous instruments confondus, du plus recent au plus ancien. Bouton
+  *Actualiser les actualites* (Claude Haiku pour le classement et la traduction).
+- **🔎 Vue entreprise** — *« Je creuse celle-ci. »* Le detail d'UNE valeur **suivie** :
   *son cours* (graphique + indicateurs), *ses chiffres cles*, *ce qu'en disent les
   analystes*, *ses actualites*. Tout sort de la base locale — donc uniquement pour
   les valeurs de ta liste. Un lien en bas renvoie vers **Analyser**.
@@ -153,7 +163,7 @@ porte le compte (« 🔔 3 alertes ») pour etre lisible sans l'ouvrir :
   rouvrent gratuitement ; l'ecriture se fait **apres chaque etape**, donc une
   coupure reseau ne perd jamais ce qui a deja ete paye. Sous l'analyse, un bouton
   **« ➕ Suivre cette entreprise »** : c'est la que se prend la decision d'ajouter.
-- **ℹ️ Aide** — methodologie code/LLM, role de chaque page, code des recos et
+- **ℹ️ Aide** — hors groupe, en bas du menu. Methodologie code/LLM, role de chaque page, code des recos et
   symboles (🆕, ⚠️), cout et duree de chaque bouton, sources de donnees, glossaire
   filtrable. Les pages de travail ne portent plus de renvoi vers l'aide : une page
   qui doit pointer son mode d'emploi a chaque en-tete ne s'explique pas toute seule.

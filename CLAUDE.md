@@ -72,7 +72,7 @@ tient a la main (voir §9).
 ## 4. Carte du depot
 
 ```
-app.py                     UI Streamlit — 6 pages + menu burger (~2000 lignes, monolithe assume)
+app.py                     UI Streamlit — 8 pages, menu burger a 2 niveaux (~2000 lignes, monolithe assume)
 sam_invest/
   config.py                Chargement/validation de config.yaml + .env ; ecriture du bloc watchlist
   db.py                    SQLite : schema, migrations, tous les acces (aucun SQL ailleurs)
@@ -181,10 +181,20 @@ par page, puis la navigation en fin de fichier.
   page rendue par run — page legere sur telephone — et **l'URL porte la page
   courante** (`url_path`), donc une reconnexion revient au meme endroit. Les
   onglets (`st.tabs`) ont ete abandonnes pour cette raison : ne pas y revenir.
-- **6 pages**, nommees par la question a laquelle elles repondent, pas par
-  l'etage du pipeline : `Aujourd'hui` (defaut), `Ma liste`, `Une entreprise`,
-  `Ma synthese`, `Analyser`, `Aide`. `Analyser` est a part car sa **portee** est
-  differente : n'importe quelle societe cotee, pas seulement la watchlist.
+- **8 pages**, nommees par la question a laquelle elles repondent, pas par
+  l'etage du pipeline, rangees dans un menu a **deux niveaux** via `st.navigation`
+  (dict `{section: [st.Page, ...]}`, sections repliables nativement) :
+  - Hors groupe, en tete : `Ma liste`.
+  - Groupe **Donnees** (aucun appel Claude couteux) : `Cours de bourse` (defaut),
+    `Calendrier des evenements`, `News`, `Vue entreprise`.
+  - Groupe **Analyse IA** (Sonnet/Opus, au clic) : `Ma synthese`, `Analyser`.
+  - Hors groupe, en pied : `Aide`.
+
+  `Analyser` a une portee differente des sept autres pages : n'importe quelle
+  societe cotee, pas seulement la watchlist. La section a cle `""` est placee par
+  Streamlit en tete du menu, avant les sections nommees — c'est elle qui porte
+  `Ma liste` ; `Aide` recoit sa propre section a un seul element pour rester en
+  bas (Streamlit ne permet pas deux sections sans en-tete dans un seul menu).
 - **Watchlist vide** -> `ecran_demarrage()` court-circuite la navigation. Ne pas
   afficher un menu et des tableaux vides a quelqu'un qui decouvre l'outil.
 - **Mobile d'abord** : usage principal = telephone. Les durees et les couts sont
