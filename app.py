@@ -15,16 +15,16 @@ UX MOBILE D'ABORD (usage principal : telephone, en transports) :
     pas en session : une coupure reseau ne fait jamais perdre un resultat.
 
 Huit pages, nommees par la QUESTION a laquelle elles repondent plutot que par
-l'etage du pipeline qui les alimente. Chacune porte son bouton de mise a jour,
-plus une mise a jour globale dans le menu (consommation d'API maitrisee).
+l'etage du pipeline qui les alimente. Les mises a jour se font depuis trois
+boutons dans le menu (voir plus bas), pas depuis les pages elles-memes.
   - Ma liste                  : edition de la liste + suggestions d'ajout
                                  (Sonnet, au clic). Hors groupe.
   - Cours de bourse           : cours + signaux de tes valeurs. Page par
                                  defaut. Groupe Donnees, gratuit.
   - Calendrier des evenements : echeances resultats/ex-dividende, revisions
                                  d'estimations. Groupe Donnees, gratuit.
-  - News                      : fil chronologique des actualites (Haiku pour
-                                 le classement). Groupe Donnees.
+  - News                      : actualites groupees par instrument (Haiku
+                                 pour le classement). Groupe Donnees.
   - Vue entreprise             : la fiche complete d'UNE valeur suivie — cours,
                                  actualites, chiffres, analystes. Groupe Donnees.
   - Ma synthese                : la lecture redigee par Claude, et elle seule
@@ -666,12 +666,11 @@ def rendre_news(n: dict, a: dict | None = None, compact: bool = False) -> None:
 
 
 # --------------------------------------------------------------------------
-# ACTUALITES : un fil date sur "News", un bloc sur la fiche entreprise
-# --------------------------------------------------------------------------
-# L'ancienne page News redressait une SECONDE liste de la watchlist, un volet
-# par valeur. Les actualites ne sont pas une facon d'enumerer le portefeuille :
-# elles sont datees. Elles vivent donc en fil chronologique la ou on demande
-# « quoi de neuf ? », et par entreprise sur la fiche de l'entreprise.
+# ACTUALITES : regroupees par instrument sur "News", meme bloc sur la fiche
+# entreprise (bloc_news_entreprise). Un instrument = un sujet ; melanger les
+# societes dans un seul fil chronologique rendait plus difficile de suivre
+# celle qui nous interesse. L'instrument le plus recemment couvert reste en
+# tete du groupe, pour ne pas perdre le reflexe « quoi de neuf ? ».
 # --------------------------------------------------------------------------
 def _analyses_news(ticker: str) -> dict:
     """Classement Claude des news d'un ticker, indexe par titre original. {} si absent."""
@@ -698,27 +697,31 @@ def bloc_news_entreprise(ticker: str) -> None:
         rendre_news(n, analyses.get(n.get("headline", "")), compact=False)
 
 
-def fil_actualites(limite: int = 12) -> None:
-    """Fil chronologique tous instruments confondus, du plus recent au plus ancien."""
-    items = []
+def fil_actualites() -> None:
+    """Actualites groupees par instrument, le plus recemment couvert en tete.
+
+    Repliees par defaut (comme les Actions/ETF de Cours de bourse) : la page
+    tient en un ecran de sommaire, on ouvre l'instrument qui interesse.
+    """
+    groupes = []
     for inst in config.watchlist:
-        analyses = _analyses_news(inst.ticker)
-        for n in db.get_news(inst.ticker) or []:
-            items.append((n.get("datetime", ""), inst.ticker, n,
-                          analyses.get(n.get("headline", ""))))
-    if not items:
+        raw = db.get_news(inst.ticker)
+        if not raw:
+            continue
+        derniere = max((n.get("datetime", "") for n in raw), default="")
+        groupes.append((derniere, inst, raw))
+    if not groupes:
         st.caption("Aucune actualite en base. Clique sur « 🔄 MAJ page courante » "
                    "dans le menu ☰.")
         return
-    items.sort(key=lambda x: x[0], reverse=True)
-    for i, (_, ticker, n, a) in enumerate(items[:limite]):
-        if i:
-            st.divider()
-        st.caption(f"**{ticker}**")
-        rendre_news(n, a, compact=False)
-    if len(items) > limite:
-        st.caption(f"{len(items) - limite} actualite(s) plus ancienne(s) : "
-                   "elles restent sur la fiche de chaque entreprise.")
+    groupes.sort(key=lambda g: g[0], reverse=True)
+    for _derniere, inst, raw in groupes:
+        analyses = _analyses_news(inst.ticker)
+        with st.expander(f"{inst.ticker} — {inst.nom} ({len(raw)})"):
+            for i, n in enumerate(raw):
+                if i:
+                    st.divider()
+                rendre_news(n, analyses.get(n.get("headline", "")), compact=False)
 
 
 def titre_page(icone: str, titre: str, accroche: str) -> None:
@@ -865,10 +868,10 @@ def page_calendrier():
 
 
 # --------------------------------------------------------------------------
-# PAGE NEWS : fil chronologique des actualites (Haiku pour le classement)
+# PAGE NEWS : actualites groupees par instrument (Haiku pour le classement)
 # --------------------------------------------------------------------------
 def page_news():
-    titre_page("📰", "News", "Le fil des actualites recentes de tes valeurs suivies.")
+    titre_page("📰", "News", "Les actualites recentes de tes valeurs suivies, par instrument.")
     caption_derniere_maj("news", "actualites")
     if not config.secrets.anthropic_api_key:
         st.info("Sans cle Claude, les actualites s'affichent en clair mais ne sont "
@@ -1846,8 +1849,8 @@ def page_about():
             "se pose en ouvrant l'app.\n\n"
             "**📅 Calendrier des evenements** — Resultats et ex-dividende a venir, "
             "revisions d'estimations et consensus des analystes.\n\n"
-            "**📰 News** — Le fil chronologique des actualites, toutes tes valeurs "
-            "confondues.\n\n"
+            "**📰 News** — Les actualites recentes, groupees par instrument (celui "
+            "couvert le plus recemment en tete).\n\n"
             "**🔎 Vue entreprise** — Le detail d'UNE valeur suivie : son cours, ses "
             "chiffres cles, l'avis des analystes, ses actualites. Tout vient de la "
             "base locale, donc uniquement pour les valeurs de ta liste.\n\n"

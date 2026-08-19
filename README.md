@@ -162,8 +162,9 @@ porte le compte (« 🔔 3 alertes ») pour etre lisible sans l'ouvrir :
 - **📅 Calendrier des evenements** — *« Qu'est-ce qui arrive ? »* Resultats et
   ex-dividende a venir, revisions d'estimations et **consensus analystes**, en
   deux tableaux pliables.
-- **📰 News** — *« Qu'est-ce qui s'est dit ? »* Le **fil des actualites
-  recentes**, tous instruments confondus, du plus recent au plus ancien.
+- **📰 News** — *« Qu'est-ce qui s'est dit ? »* Les **actualites recentes**,
+  regroupees par instrument (section pliable), celui couvert le plus
+  recemment en tete.
 - **🔎 Vue entreprise** — *« Je creuse celle-ci. »* Le detail d'UNE valeur **suivie** :
   *son cours* (graphique + indicateurs), *ses chiffres cles*, *ce qu'en disent les
   analystes*, *ses actualites*. Tout sort de la base locale — donc uniquement pour
