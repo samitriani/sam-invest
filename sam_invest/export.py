@@ -299,9 +299,11 @@ def _news_lignes(ticker: str) -> list[str]:
         if meta_txt:
             entete += f" ({meta_txt})"
         out.append(entete)
-        resume = ((a.get("resume_fr") or "").strip() if a else "") or (n.get("summary") or "").strip()
+        resume = (((a.get("resume") or "").strip() if a else "")
+                  or ((a.get("resume_fr") or "").strip() if a else "")
+                  or (n.get("summary") or "").strip())
         if resume:
-            out.append(f"  - {resume if len(resume) <= 600 else resume[:600].rstrip() + '…'}")
+            out.append(f"  - {resume if len(resume) <= 900 else resume[:900].rstrip() + '…'}")
         if n.get("url"):
             out.append(f"  - {n['url']}")
     return out

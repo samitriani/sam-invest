@@ -649,14 +649,14 @@ def rendre_news(n: dict, a: dict | None = None, compact: bool = False) -> None:
     meta_txt = " · ".join(meta)
 
     if not compact:
-        # Resume source traduit en priorite, sinon le resume source original,
-        # sinon le resume d'une phrase de Haiku.
+        # Synthese Haiku en priorite (3 a 5 phrases, l'essentiel plutot qu'une
+        # traduction mecanique) ; a defaut, traduction du resume source, puis
+        # le resume source original (non traduit, ex. sans cle Claude).
+        resume_haiku = (a.get("resume") or "").strip() if a else ""
         resume_fr = (a.get("resume_fr") or "").strip() if a else ""
-        resume = resume_fr or (n.get("summary") or "").strip()
+        resume = resume_haiku or resume_fr or (n.get("summary") or "").strip()
         if resume:
-            st.write(resume if len(resume) <= 500 else resume[:500].rstrip() + "…")
-        elif a and a.get("resume"):
-            st.caption(a["resume"])
+            st.write(resume if len(resume) <= 900 else resume[:900].rstrip() + "…")
 
     if n.get("url"):
         suffix = f"  ·  _{meta_txt}_" if meta_txt else ""

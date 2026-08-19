@@ -59,6 +59,9 @@ def classer_news(secrets: Secrets, ticker: str, news_items: list[dict]) -> list[
 
     tonalite ∈ {positif, neutre, negatif} ; categorie libre courte
     (resultats, produit, reglementaire, macro, dirigeant, autre).
+    resume = synthese en francais de l'essentiel (3 a 5 phrases : ce qui se
+    passe, le contexte utile, l'implication pour l'entreprise) — pas une
+    simple traduction, une vraie reformulation de ce qui compte.
     titre_fr / resume_fr = traduction francaise du titre et du resume source.
     """
     client = _client(secrets)
@@ -77,7 +80,10 @@ def classer_news(secrets: Secrets, ticker: str, news_items: list[dict]) -> list[
         f'- "headline" : reprends le titre ORIGINAL a l\'identique (sert a l\'alignement) ;\n'
         f'- "categorie" : un mot parmi resultats, produit, reglementaire, macro, dirigeant, autre ;\n'
         f'- "tonalite" : positif|neutre|negatif du point de vue de l\'entreprise ;\n'
-        f'- "resume" : 1 phrase factuelle en francais, sans chiffre invente ;\n'
+        f'- "resume" : 3 a 5 phrases en francais qui capturent l\'essentiel de la '
+        f'news pour un investisseur — ce qui se passe, le contexte utile, ce que ca '
+        f'implique pour l\'entreprise. Une vraie synthese, pas une simple traduction '
+        f'du titre. Reste factuel, sans chiffre invente et sans recommandation ;\n'
         f'- "titre_fr" : traduction francaise fidele et concise du titre ;\n'
         f'- "resume_fr" : traduction francaise du champ resume_source (1 a 2 phrases) ; '
         f'si resume_source est vide, mets "".\n'
@@ -88,7 +94,7 @@ def classer_news(secrets: Secrets, ticker: str, news_items: list[dict]) -> list[
     try:
         resp = client.messages.create(
             model=secrets.model_haiku,
-            max_tokens=3000,
+            max_tokens=4096,  # resume plus developpe (3 a 5 phrases) : plus de marge que l'ancien 3000
             system=NEWS_SYSTEM,
             messages=[{"role": "user", "content": user}],
         )
