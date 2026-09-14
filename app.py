@@ -849,15 +849,20 @@ def page_calendrier():
                 achat = (ar.get("strong_buy") or 0) + (ar.get("buy") or 0)
                 cons = ar.get("hold") or 0
                 vente = (ar.get("sell") or 0) + (ar.get("strong_sell") or 0)
+            # Revisions et consensus repliees en UNE colonne texte chacune (au lieu
+            # de 3 colonnes numeriques par groupe) : sur 375 px, 9 colonnes
+            # obligeaient a faire defiler le tableau pour lire l'essentiel.
+            # "Obj. cours moyen" est retire : un prix cible sans le cours a cote
+            # ne se lit pas, et Potentiel % est deja sa version digeree.
+            if v.rev_net_30 is not None:
+                revisions_txt = f"{v.rev_net_30:+.0f} ({v.rev_up_30:.0f}↑/{v.rev_down_30:.0f}↓)"
+            else:
+                revisions_txt = "n/d"
+            consensus_txt = f"{achat:.0f}A · {cons:.0f}C · {vente:.0f}V" if achat is not None else "n/d"
             est_rows.append({
                 "Ticker": v.instrument.ticker,
-                "Revisions 30j (net)": v.rev_net_30,
-                "Hausses": v.rev_up_30,
-                "Baisses": v.rev_down_30,
-                "Achat": achat,
-                "Conserver": cons,
-                "Vendre": vente,
-                "Obj. cours moyen": v.pt_mean,
+                "Revisions 30j": revisions_txt,
+                "Consensus": consensus_txt,
                 "Potentiel %": v.potentiel_pct,
             })
         with st.expander("Calendrier", expanded=False):
@@ -866,18 +871,11 @@ def page_calendrier():
             st.dataframe(
                 pd.DataFrame(est_rows), use_container_width=True, hide_index=True,
                 column_config={
-                    "Revisions 30j (net)": st.column_config.NumberColumn(
-                        format="%.0f", help=glossaire.definition("Revisions")),
-                    "Hausses": st.column_config.NumberColumn(format="%.0f"),
-                    "Baisses": st.column_config.NumberColumn(format="%.0f"),
-                    "Achat": st.column_config.NumberColumn(
-                        format="%.0f", help="Nb d'analystes en Achat (fort inclus)"),
-                    "Conserver": st.column_config.NumberColumn(
-                        format="%.0f", help="Nb d'analystes en Conserver"),
-                    "Vendre": st.column_config.NumberColumn(
-                        format="%.0f", help="Nb d'analystes en Vendre (fort inclus)"),
-                    "Obj. cours moyen": st.column_config.NumberColumn(
-                        format="%.2f", help=glossaire.definition("Objectif")),
+                    "Revisions 30j": st.column_config.TextColumn(
+                        help=glossaire.definition("Revisions") + " Format : net (hausses↑/baisses↓)."),
+                    "Consensus": st.column_config.TextColumn(
+                        help="Nb d'analystes : A = achat (fort inclus), "
+                             "C = conserver, V = vendre (fort inclus)."),
                     "Potentiel %": st.column_config.NumberColumn(
                         format="%.1f", help=glossaire.definition("Potentiel")),
                 },
