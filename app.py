@@ -16,9 +16,10 @@ UX MOBILE D'ABORD (usage principal : telephone, en transports) :
 
 Huit pages, nommees par la QUESTION a laquelle elles repondent plutot que par
 l'etage du pipeline qui les alimente. Chaque page qui affiche des donnees porte
-son propre bouton d'actualisation ; seule la mise a jour globale (toute la
-watchlist, cours + news) reste dans le menu, parce qu'elle ne vise aucune page
-en particulier.
+son propre bouton d'actualisation (scope reduit a cette page). Le menu garde
+en plus deux boutons globaux (toute la watchlist, aucune page en particulier) :
+un qui rafraichit cours + news, un qui enchaine ce rafraichissement et la
+synthese Sonnet.
   - Ma liste                  : edition de la liste + suggestions d'ajout
                                  (Sonnet, au clic). Hors groupe.
   - Cours de bourse           : cours + signaux de tes valeurs. Page par
@@ -215,9 +216,10 @@ def fraicheur(kind: str) -> tuple[bool, str | None]:
 def ecrire_synthese(config) -> dict:
     """UN appel Sonnet (ou reprise du cache si donnees/news inchangees).
 
-    Appelee par le bouton « 🧠 Lancer l'analyse » de la page Ma synthese, juste
-    apres qu'il a rafraichi cours et news via `update_global` : cette fonction
-    ne rafraichit rien, elle lit l'etat courant de la base et ecrit (ou
+    Appelee par « 🧠 Lancer l'analyse » (page Ma synthese, sur l'existant tel
+    quel) et par « 🔄 Mettre a jour donnees et analyse » (menu ☰, juste apres
+    avoir rafraichi cours et news via `update_global`) : cette fonction ne
+    rafraichit rien elle-meme, elle lit l'etat courant de la base et ecrit (ou
     reutilise le cache si rien n'a change).
     """
     _ad = db.last_update("donnees")
@@ -1022,9 +1024,11 @@ def page_briefing():
     titre_page("🧠", "Ma synthese",
                "La lecture d'ensemble de tes valeurs, ecrite pour toi.")
 
-    # La synthese reprend cours et actualites : le bouton ci-dessous rafraichit
-    # les deux (update_global) puis ecrit le texte (ecrire_synthese) en un seul
-    # geste, directement depuis cette page.
+    # « Lancer l'analyse » n'ecrit QUE la synthese, a partir des cours/actualites
+    # deja en base : elle ne les rafraichit pas elle-meme. Pour une lecture a
+    # jour, rafraichir d'abord via « 🔄 Mettre a jour donnees et analyse » dans
+    # le menu ☰ (qui enchaine les deux), ou via les boutons des pages Cours de
+    # bourse / News.
     donnees_fraiches, asof_donnees = fraicheur("donnees")
     news_fraiches, asof_news = fraicheur("news")
 
@@ -1039,11 +1043,11 @@ def page_briefing():
 
     if st.button("🧠 Lancer l'analyse", use_container_width=True,
                  disabled=not config.secrets.anthropic_api_key):
-        afficher_compte_rendu(run_update(update_global, "Mise a jour globale"))
         afficher_compte_rendu_synthese(ecrire_synthese(config))
     st.caption(
-        "⏱️ Cours + actualites, puis synthese (Claude Sonnet). Compte 3 a 4 min, "
-        "garde l'app ouverte."
+        "⏱️ Synthese (Claude Sonnet) sur la base des cours/actualites deja "
+        "recuperes ci-dessus. Compte 2 a 3 min. Pour tout rafraichir avant, "
+        "utilise « 🔄 Mettre a jour donnees et analyse » dans le menu ☰."
         if config.secrets.anthropic_api_key
         else "ANTHROPIC_API_KEY absente : synthese desactivee."
     )
@@ -1920,18 +1924,20 @@ def page_about():
 
     with st.expander("💸 Ce que coute chaque bouton"):
         st.markdown(
-            "L'app appelle Claude sur certains boutons seulement. Un seul bouton "
-            "global vit dans le menu ☰, en haut, quelle que soit la page ouverte ; "
-            "les autres vivent directement sur la page qu'ils actualisent. Ordre de "
-            "grandeur :\n\n"
+            "L'app appelle Claude sur certains boutons seulement. Les mises a "
+            "jour propres a une page vivent sur cette page ; deux boutons "
+            "globaux (toute la watchlist) restent dans le menu ☰, quelle que "
+            "soit la page ouverte. Ordre de grandeur :\n\n"
             "| Bouton | Duree | Cout |\n|---|---|---|\n"
             "| 🔄 Actualiser cette page (Cours de bourse, Calendrier, Vue entreprise) "
             "| ~10 a 30 s | gratuit |\n"
             "| 🔄 Actualiser cette page (News) | ~10 a 30 s | cout Claude Haiku "
             "(classement + traduction) |\n"
+            "| 🧠 Lancer l'analyse (page Ma synthese) | ~2 a 3 min | 1 appel Sonnet, "
+            "sur les donnees deja recuperees (ne rafraichit rien) |\n"
             "| 🔄 Mettre a jour les donnees (menu ☰) | ~1 min | cours + actualites "
             "(Haiku), **pas** la synthese |\n"
-            "| 🧠 Lancer l'analyse (page Ma synthese) | **3 a 4 min** | cours + "
+            "| 🔄 Mettre a jour donnees et analyse (menu ☰) | **3 a 4 min** | cours + "
             "actualites, puis 1 appel Sonnet pour toute la liste |\n"
             "| Generer des suggestions (page Ma liste) | ~20 s | 1 appel |\n"
             "| Analyser (page Analyser) | ~1 min | le plus cher : 1 appel par etape |\n\n"
@@ -2095,7 +2101,10 @@ navigation = st.navigation(PAGES, position="sidebar")
 # Le menu n'accueille plus que l'action globale (watchlist entiere, aucune page
 # en particulier) : chaque page qui affiche des donnees porte desormais son
 # propre bouton d'actualisation (page_cours, page_calendrier, page_news,
-# page_instrument), et « Ma synthese » porte le sien (« 🧠 Lancer l'analyse »).
+# page_instrument), et « Ma synthese » porte « 🧠 Lancer l'analyse » qui
+# n'ecrit QUE la synthese a partir de l'existant. Le menu garde en plus le
+# bouton qui enchaine tout (donnees + synthese) en un seul clic : il n'est
+# rattache a aucune page precise, contrairement aux boutons ci-dessus.
 with st.sidebar:
     st.markdown("## 📊 Sam_Invest")
     st.caption("Mes valeurs, suivies au jour le jour")
@@ -2109,12 +2118,24 @@ with st.sidebar:
     alertes_slot = st.container()
     st.divider()
 
-    # --- Seule action globale restante ici : les mises a jour scopees a une
-    # page vivent desormais sur la page elle-meme (voir plus haut). ---
+    # --- Actions globales restantes ici : les mises a jour scopees a une page
+    # vivent desormais sur la page elle-meme (voir plus haut). ---
     btn_donnees = st.button(
         "🔄 Mettre a jour les donnees", use_container_width=True,
         help="Cours + actualites (Haiku pour les news), pour toute la watchlist. "
              "N'ecrit pas la synthese.",
+    )
+
+    btn_donnees_analyse = st.button(
+        "🔄 Mettre a jour donnees et analyse", use_container_width=True,
+        disabled=not config.secrets.anthropic_api_key,
+        help="Cours + actualites, puis la synthese Sonnet pour toute la liste.",
+    )
+    st.caption(
+        "⏱️ Cours + actualites, puis synthese (Claude Sonnet). Compte 3 a 4 min, "
+        "garde l'app ouverte."
+        if config.secrets.anthropic_api_key
+        else "ANTHROPIC_API_KEY absente : synthese desactivee."
     )
 
     # Emplacement reserve pour l'export : rempli en fin de script (voir plus bas)
@@ -2131,12 +2152,15 @@ with st.sidebar:
             for w in config.warnings:
                 st.warning(w)
 
-# La mise a jour globale s'execute AVANT le rendu de la page pour que les
+# Les mises a jour globales s'executent AVANT le rendu de la page pour que les
 # tableaux affiches soient deja frais. Les mises a jour scopees a une page
 # (voir page_cours, page_calendrier, page_news, page_instrument, page_briefing)
 # s'executent, elles, dans la page elle-meme, avant qu'elle ne lise ses donnees.
 if btn_donnees:
     afficher_compte_rendu(run_update(update_global, "Mise a jour globale"))
+if btn_donnees_analyse:
+    afficher_compte_rendu(run_update(update_global, "Mise a jour globale"))
+    afficher_compte_rendu_synthese(ecrire_synthese(config))
 
 # Flags calcules UNE fois par run, apres l'eventuelle mise a jour : ils
 # alimentent le menu des alertes ci-dessous et le tri de « Ma synthese ».

@@ -128,9 +128,11 @@ config.yaml ──> config.load_config() ──> AppConfig (watchlist + regles +
 
 `update.update_global` = donnees + news. La fonction elle-meme ne declenche
 **jamais** la synthese Sonnet ; c'est l'UI (`app.py`) qui enchaine
-`update_global` puis `ecrire_synthese` quand on clique sur « 🧠 Lancer
-l'analyse » (page Ma synthese) — deux appels distincts, pas une fusion des
-deux fonctions.
+`update_global` puis `ecrire_synthese` quand on clique sur « 🔄 Mettre a jour
+donnees et analyse » (menu ☰) — deux appels distincts, pas une fusion des
+deux fonctions. `ecrire_synthese` seule (sans `update_global`) est aussi
+appelable directement via « 🧠 Lancer l'analyse » (page Ma synthese), pour
+regenerer le texte sur les donnees deja en base sans payer un rafraichissement.
 
 **Chaine de repli des sources** : yfinance d'abord (gratuit, sans cle), puis
 Finnhub, puis FMP — pour menager les quotas. Regle d'or de `data_sources.py` :
@@ -144,8 +146,8 @@ indisponible en aval.
 
 | Modele | Appele par | Quand | Ce qu'il produit |
 |---|---|---|---|
-| Haiku | `llm.classer_news` | page News : « 🔄 Actualiser cette page » ou menu ☰ : « Mettre a jour les donnees » | categorie, tonalite, resume FR, traduction du titre |
-| Sonnet | `llm.synthese_et_reco` | page Ma synthese : « 🧠 Lancer l'analyse » | 1 SEUL appel pour le global + tous les instruments |
+| Haiku | `llm.classer_news` | page News : « 🔄 Actualiser cette page » ou menu ☰ : « Mettre a jour les donnees » / « Mettre a jour donnees et analyse » | categorie, tonalite, resume FR, traduction du titre |
+| Sonnet | `llm.synthese_et_reco` | page Ma synthese : « 🧠 Lancer l'analyse » (sur l'existant) ou menu ☰ : « Mettre a jour donnees et analyse » (apres rafraichissement) | 1 SEUL appel pour le global + tous les instruments |
 | Sonnet | `llm.generer_idees_thematiques` | bouton « Generer des suggestions » | tickers candidats (texte seul, valides ensuite par le code) |
 | Opus | `llm.conclusion_etape_stream`, `llm.exec_summary_diagnostic_stream` | bouton « Analyser » | conclusion par etape + executive summary |
 
@@ -198,19 +200,20 @@ par page, puis la navigation en fin de fichier.
   Streamlit en tete du menu, avant les sections nommees — c'est elle qui porte
   `Ma liste` ; `Aide` recoit sa propre section a un seul element pour rester en
   bas (Streamlit ne permet pas deux sections sans en-tete dans un seul menu).
-- **Chaque page qui affiche des donnees porte son propre bouton d'actualisation**
-  (« 🔄 Actualiser cette page » sur `Cours de bourse`, `Calendrier des
-  evenements`, `News`, `Vue entreprise` ; « 🧠 Lancer l'analyse » sur `Ma
-  synthese`, desactive sans `ANTHROPIC_API_KEY`). Le bouton est place en tete de
-  la fonction de page, **avant** le code qui lit les donnees qu'il rafraichit :
-  Streamlit rejoue la fonction entiere au clic, donc le reste de la page voit
-  deja les donnees fraiches sans `st.rerun()` — le meme principe que les
-  actions globales ci-dessous, applique a l'echelle d'une page. Seule la
-  mise a jour qui ne vise aucune page en particulier — « 🔄 Mettre a jour les
-  donnees » (`update_global` : cours + news, jamais la synthese, toute la
-  watchlist) — reste dans le menu ☰, executee **avant** `navigation.run()`
-  comme les alertes. Ne pas dupliquer un bouton de page dans le menu (ni
-  l'inverse) : une seule action, un seul endroit.
+- **Chaque page qui affiche des donnees porte son propre bouton d'actualisation,
+  scope a cette page** (« 🔄 Actualiser cette page » sur `Cours de bourse`,
+  `Calendrier des evenements`, `News`, `Vue entreprise` ; « 🧠 Lancer l'analyse »
+  sur `Ma synthese`, desactive sans `ANTHROPIC_API_KEY`). Le bouton est place en
+  tete de la fonction de page, **avant** le code qui lit les donnees qu'il
+  rafraichit : Streamlit rejoue la fonction entiere au clic, donc le reste de la
+  page voit deja les donnees fraiches sans `st.rerun()`. Sur `Ma synthese`,
+  « 🧠 Lancer l'analyse » n'ecrit QUE la synthese (`ecrire_synthese`) a partir
+  des cours/actualites deja en base — elle ne les rafraichit pas elle-meme.
+  Le menu ☰ garde en plus **deux boutons globaux** (toute la watchlist, aucune
+  page en particulier), executes **avant** `navigation.run()` comme les
+  alertes : « 🔄 Mettre a jour les donnees » (`update_global` : cours + news,
+  jamais la synthese) et « 🔄 Mettre a jour donnees et analyse » (`update_global`
+  puis `ecrire_synthese` — le seul bouton qui enchaine tout en un clic).
 - **Watchlist vide** -> `ecran_demarrage()` court-circuite la navigation. Ne pas
   afficher un menu et des tableaux vides a quelqu'un qui decouvre l'outil.
 - **Mobile d'abord** : usage principal = telephone. Les durees et les couts sont
