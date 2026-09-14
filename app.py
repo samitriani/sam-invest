@@ -799,9 +799,12 @@ def page_cours():
             if not sous:
                 continue
             with st.expander(f"{type_label} ({len(sous)})", expanded=True):
-                for i, s in enumerate(sous):
-                    if i:
-                        st.divider()
+                # Pas de st.divider() entre les lignes : sa marge verticale
+                # (~1,5 rem) doublait l'espace deja pris par le gap natif entre
+                # blocs Streamlit, pour un resultat trop aere sur telephone.
+                # Meme convention que la liste d'alertes (rendre_menu_alertes) :
+                # le ticker en gras suffit a separer une ligne de la suivante.
+                for s in sous:
                     _ligne_cours(s)
         st.caption("n/d = donnees pas encore recuperees, lance une actualisation.")
     else:
