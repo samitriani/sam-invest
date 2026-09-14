@@ -15,8 +15,10 @@ UX MOBILE D'ABORD (usage principal : telephone, en transports) :
     pas en session : une coupure reseau ne fait jamais perdre un resultat.
 
 Huit pages, nommees par la QUESTION a laquelle elles repondent plutot que par
-l'etage du pipeline qui les alimente. Les mises a jour se font depuis trois
-boutons dans le menu (voir plus bas), pas depuis les pages elles-memes.
+l'etage du pipeline qui les alimente. Chaque page qui affiche des donnees porte
+son propre bouton d'actualisation ; seule la mise a jour globale (toute la
+watchlist, cours + news) reste dans le menu, parce qu'elle ne vise aucune page
+en particulier.
   - Ma liste                  : edition de la liste + suggestions d'ajout
                                  (Sonnet, au clic). Hors groupe.
   - Cours de bourse           : cours + signaux de tes valeurs. Page par
@@ -213,10 +215,10 @@ def fraicheur(kind: str) -> tuple[bool, str | None]:
 def ecrire_synthese(config) -> dict:
     """UN appel Sonnet (ou reprise du cache si donnees/news inchangees).
 
-    Extrait de la page « Ma synthese » pour etre appelable depuis le bouton
-    « Mettre a jour donnees et analyse » du menu, qui vient de rafraichir cours
-    et news lui-meme : cette fonction ne rafraichit rien, elle lit l'etat courant
-    de la base et ecrit (ou reutilise le cache si rien n'a change).
+    Appelee par le bouton « 🧠 Lancer l'analyse » de la page Ma synthese, juste
+    apres qu'il a rafraichi cours et news via `update_global` : cette fonction
+    ne rafraichit rien, elle lit l'etat courant de la base et ecrit (ou
+    reutilise le cache si rien n'a change).
     """
     _ad = db.last_update("donnees")
     _ad = _ad.get("asof") if _ad else None
@@ -688,7 +690,7 @@ def bloc_news_entreprise(ticker: str) -> None:
     raw = db.get_news(ticker)
     if not raw:
         st.caption("Aucune actualite en base pour cette entreprise. "
-                   "Va sur News et lance « 🔄 MAJ page courante » dans le menu ☰.")
+                   "Va sur News et lance « 🔄 Actualiser cette page ».")
         return
     analyses = _analyses_news(ticker)
     for i, n in enumerate(raw):
@@ -711,8 +713,8 @@ def fil_actualites() -> None:
         derniere = max((n.get("datetime", "") for n in raw), default="")
         groupes.append((derniere, inst, raw))
     if not groupes:
-        st.caption("Aucune actualite en base. Clique sur « 🔄 MAJ page courante » "
-                   "dans le menu ☰.")
+        st.caption("Aucune actualite en base. Clique sur « 🔄 Actualiser cette page » "
+                   "ci-dessus.")
         return
     groupes.sort(key=lambda g: g[0], reverse=True)
     for _derniere, inst, raw in groupes:
@@ -745,6 +747,8 @@ def titre_page(icone: str, titre: str, accroche: str) -> None:
 def page_cours():
     titre_page("📈", "Cours de bourse", "Ce qui a bouge aujourd'hui sur tes valeurs suivies.")
     caption_derniere_maj("donnees", "cours")
+    if st.button("🔄 Actualiser cette page", use_container_width=True):
+        afficher_compte_rendu(run_update(update_donnees, "Mise a jour des donnees"))
 
     snaps = signals.construire_snapshots(config)
 
@@ -797,6 +801,8 @@ def page_calendrier():
     titre_page("📅", "Calendrier des evenements",
                "Resultats et ex-dividende a venir, revisions d'estimations et consensus.")
     caption_derniere_maj("donnees", "cours")
+    if st.button("🔄 Actualiser cette page", use_container_width=True):
+        afficher_compte_rendu(run_update(update_donnees, "Mise a jour des donnees"))
 
     # Streamlit interdit d'imbriquer un expander dans un expander : les deux
     # tableaux sont chacun pliables, cote a cote sur la page plutot que dans
@@ -873,6 +879,9 @@ def page_calendrier():
 def page_news():
     titre_page("📰", "News", "Les actualites recentes de tes valeurs suivies, par instrument.")
     caption_derniere_maj("news", "actualites")
+    if st.button("🔄 Actualiser cette page", use_container_width=True):
+        afficher_compte_rendu(run_update(update_news, "Mise a jour des news"))
+    st.caption("Cout Claude Haiku (classement + traduction).")
     if not config.secrets.anthropic_api_key:
         st.info("Sans cle Claude, les actualites s'affichent en clair mais ne sont "
                 "ni classees ni traduites.")
@@ -923,8 +932,8 @@ def bloc_marche(choix: str) -> None:
             st.caption(f"✅ Cours de {choix} recuperes a l'instant.")
         else:
             st.warning(f"Impossible de recuperer les cours de {choix} "
-                       "(reseau/source ?). Reessaie via « 🔄 MAJ page courante » "
-                       "dans le menu ☰.")
+                       "(reseau/source ?). Reessaie via « 🔄 Actualiser "
+                       f"{choix} » ci-dessus.")
     q_sel = db.get_quote(choix)
     if q_sel and q_sel.get("asof"):
         st.caption(f"🕒 Cours de {choix} : maj {fmt_dt(q_sel['asof'])}.")
@@ -956,8 +965,7 @@ def bloc_marche(choix: str) -> None:
             ("Plus-haut 52s", _fmt(ind["high_52w"])),
         ])
     else:
-        st.caption("Pas encore d'historique. Lance « 🔄 Mettre a jour les donnees » "
-                   "dans le menu ☰.")
+        st.caption(f"Pas encore d'historique. Lance « 🔄 Actualiser {choix} » ci-dessus.")
 
     # --- Sous-partie 2 : fondamentaux ---
     st.markdown("#### Ses chiffres cles")
@@ -981,6 +989,10 @@ def page_instrument():
     choix = st.selectbox("Entreprise", list(noms),
                          format_func=lambda t: f"{t} — {noms[t]}",
                          key="entreprise_ticker")
+    if st.button(f"🔄 Actualiser {choix}", use_container_width=True):
+        afficher_compte_rendu(run_update(
+            lambda cfg, cb: update_donnees_instrument(cfg, choix, cb),
+            f"Mise a jour de {choix}"))
     bloc_marche(choix)
 
     # Replie par defaut : les actualites d'une valeur representent l'essentiel du
@@ -1010,9 +1022,9 @@ def page_briefing():
     titre_page("🧠", "Ma synthese",
                "La lecture d'ensemble de tes valeurs, ecrite pour toi.")
 
-    # La synthese reprend cours et actualites : on affiche leur fraicheur, mais
-    # ecrire la synthese n'est plus une action de cette page — c'est le role du
-    # bouton « Mettre a jour donnees et analyse » du menu (voir en bas du script).
+    # La synthese reprend cours et actualites : le bouton ci-dessous rafraichit
+    # les deux (update_global) puis ecrit le texte (ecrire_synthese) en un seul
+    # geste, directement depuis cette page.
     donnees_fraiches, asof_donnees = fraicheur("donnees")
     news_fraiches, asof_news = fraicheur("news")
 
@@ -1022,9 +1034,18 @@ def page_briefing():
     st.caption(
         f"🕒 Cours : {_tag_fraicheur(donnees_fraiches, asof_donnees)} · "
         f"Actualites : {_tag_fraicheur(news_fraiches, asof_news)} "
-        f"(⚠️ = plus vieux que {FRAICHEUR_MAX_H} h). "
-        "Pour l'ecrire ou la rafraichir, utilise « 🔄 Mettre a jour donnees et "
-        "analyse » dans le menu ☰."
+        f"(⚠️ = plus vieux que {FRAICHEUR_MAX_H} h)."
+    )
+
+    if st.button("🧠 Lancer l'analyse", use_container_width=True,
+                 disabled=not config.secrets.anthropic_api_key):
+        afficher_compte_rendu(run_update(update_global, "Mise a jour globale"))
+        afficher_compte_rendu_synthese(ecrire_synthese(config))
+    st.caption(
+        "⏱️ Cours + actualites, puis synthese (Claude Sonnet). Compte 3 a 4 min, "
+        "garde l'app ouverte."
+        if config.secrets.anthropic_api_key
+        else "ANTHROPIC_API_KEY absente : synthese desactivee."
     )
 
     # --- Recuperation cross-appareil : le briefing genere est persiste en base (pas
@@ -1056,8 +1077,8 @@ def page_briefing():
             st.caption(f"Synthese basee sur les donnees du {fmt_dt(st.session_state['synthese_asof'])}.")
         st.markdown(st.session_state["synth_global"])
     elif config.secrets.anthropic_api_key:
-        st.caption("Clique sur « 🔄 Mettre a jour donnees et analyse » dans le menu ☰ "
-                   "pour la vue d'ensemble et les commentaires valeur par valeur.")
+        st.caption("Clique sur « 🧠 Lancer l'analyse » ci-dessus pour la vue "
+                   "d'ensemble et les commentaires valeur par valeur.")
     else:
         st.info("ANTHROPIC_API_KEY absente : briefing desactive, mais les donnees "
                 "par instrument ci-dessous restent valables, et les alertes du "
@@ -1076,9 +1097,9 @@ def page_briefing():
 
     if not synth_inst and config.secrets.anthropic_api_key:
         st.info("💡 Le commentaire valeur par valeur apparait apres "
-                "« 🔄 Mettre a jour donnees et analyse » dans le menu ☰. Les chiffres "
-                "et les actualites ci-dessous sont deja disponibles sans appel Claude ; "
-                "les alertes sont dans le meme menu.")
+                "« 🧠 Lancer l'analyse » ci-dessus. Les chiffres et les actualites "
+                "ci-dessous sont deja disponibles sans appel Claude ; les alertes "
+                "sont dans le menu ☰.")
 
     # Recapitulatif des recos. Masque si aucune n'est connue : un briefing genere
     # avant l'ajout des recos afficherait sinon un « 0 · 0 · 0 » trompeur.
@@ -1139,8 +1160,8 @@ def page_briefing():
                     st.markdown("**🎯 Conclusion & arguments**")
                     st.markdown(entry["conclusion"])
             else:
-                st.caption("📝 Pas encore de commentaire — clique « 🔄 Mettre a jour "
-                           "donnees et analyse » dans le menu ☰.")
+                st.caption("📝 Pas encore de commentaire — clique « 🧠 Lancer "
+                           "l'analyse » en haut de page.")
             st.markdown("**Chiffres cles**")
             s = snaps_by.get(t)
             if s:
@@ -1899,14 +1920,18 @@ def page_about():
 
     with st.expander("💸 Ce que coute chaque bouton"):
         st.markdown(
-            "L'app appelle Claude sur certains boutons seulement. Trois des boutons "
-            "les plus utilises vivent dans le menu ☰, en haut, quelle que soit la "
-            "page ouverte. Ordre de grandeur :\n\n"
+            "L'app appelle Claude sur certains boutons seulement. Un seul bouton "
+            "global vit dans le menu ☰, en haut, quelle que soit la page ouverte ; "
+            "les autres vivent directement sur la page qu'ils actualisent. Ordre de "
+            "grandeur :\n\n"
             "| Bouton | Duree | Cout |\n|---|---|---|\n"
-            "| 🔄 MAJ page courante | ~10 a 30 s | gratuit, sauf sur News (Haiku) |\n"
-            "| 🔄 Mettre a jour les donnees | ~1 min | cours + actualites (Haiku), "
-            "**pas** la synthese |\n"
-            "| 🔄 Mettre a jour donnees et analyse | **3 a 4 min** | cours + "
+            "| 🔄 Actualiser cette page (Cours de bourse, Calendrier, Vue entreprise) "
+            "| ~10 a 30 s | gratuit |\n"
+            "| 🔄 Actualiser cette page (News) | ~10 a 30 s | cout Claude Haiku "
+            "(classement + traduction) |\n"
+            "| 🔄 Mettre a jour les donnees (menu ☰) | ~1 min | cours + actualites "
+            "(Haiku), **pas** la synthese |\n"
+            "| 🧠 Lancer l'analyse (page Ma synthese) | **3 a 4 min** | cours + "
             "actualites, puis 1 appel Sonnet pour toute la liste |\n"
             "| Generer des suggestions (page Ma liste) | ~20 s | 1 appel |\n"
             "| Analyser (page Analyser) | ~1 min | le plus cher : 1 appel par etape |\n\n"
@@ -2067,37 +2092,10 @@ PAGES = {
 }
 navigation = st.navigation(PAGES, position="sidebar")
 
-# navigation.title est deja connu ici (avant navigation.run()) : c'est ce qui
-# permet a « MAJ page courante » de cibler la bonne mise a jour sans attendre
-# que la page se rende.
-_page_actuelle = navigation.title
-
-# Pages ou une mise a jour a un sens : les quatre pages du groupe Donnees.
-# Ailleurs (Ma liste, Ma synthese, Analyser, Aide), pas de donnees de marche a
-# rafraichir depuis cette page-la : le bouton reste visible mais desactive
-# plutot que de faire une action qui surprendrait.
-_MAJ_POSSIBLE = {"Cours de bourse", "Calendrier des evenements", "News", "Vue entreprise"}
-
-
-def _maj_page_courante() -> dict:
-    """Actualise uniquement ce qu'affiche la page courante (voir _MAJ_POSSIBLE)."""
-    if _page_actuelle == "News":
-        return run_update(update_news, "Mise a jour des news")
-    if _page_actuelle == "Vue entreprise":
-        # Une seule entreprise, moins cher qu'une mise a jour complete. Le
-        # ticker vient du selectbox de la page, deja en session_state des que
-        # la page a ete affichee une premiere fois dans la session.
-        _ticker = st.session_state.get("entreprise_ticker")
-        if _ticker:
-            return run_update(
-                lambda cfg, cb: update_donnees_instrument(cfg, _ticker, cb),
-                f"Mise a jour de {_ticker}",
-            )
-    return run_update(update_donnees, "Mise a jour des donnees")
-
-
-# Le menu accueille aussi les actions globales : sur telephone, elles n'ont pas
-# a occuper le haut de chaque page.
+# Le menu n'accueille plus que l'action globale (watchlist entiere, aucune page
+# en particulier) : chaque page qui affiche des donnees porte desormais son
+# propre bouton d'actualisation (page_cours, page_calendrier, page_news,
+# page_instrument), et « Ma synthese » porte le sien (« 🧠 Lancer l'analyse »).
 with st.sidebar:
     st.markdown("## 📊 Sam_Invest")
     st.caption("Mes valeurs, suivies au jour le jour")
@@ -2111,35 +2109,12 @@ with st.sidebar:
     alertes_slot = st.container()
     st.divider()
 
-    # --- Trois actions de mise a jour, toujours au meme endroit quelle que
-    # soit la page ouverte, du moins cher au plus cher. ---
-    btn_page = st.button(
-        "🔄 MAJ page courante", use_container_width=True,
-        disabled=_page_actuelle not in _MAJ_POSSIBLE,
-    )
-    if _page_actuelle in _MAJ_POSSIBLE:
-        _cout_page = ("cout Claude Haiku (classement + traduction)"
-                      if _page_actuelle == "News" else "gratuit")
-        st.caption(f"Actualise uniquement « {_page_actuelle} » ({_cout_page}).")
-    else:
-        st.caption(f"Rien a actualiser depuis « {_page_actuelle} ».")
-
+    # --- Seule action globale restante ici : les mises a jour scopees a une
+    # page vivent desormais sur la page elle-meme (voir plus haut). ---
     btn_donnees = st.button(
         "🔄 Mettre a jour les donnees", use_container_width=True,
         help="Cours + actualites (Haiku pour les news), pour toute la watchlist. "
              "N'ecrit pas la synthese.",
-    )
-
-    btn_donnees_analyse = st.button(
-        "🔄 Mettre a jour donnees et analyse", use_container_width=True,
-        disabled=not config.secrets.anthropic_api_key,
-        help="Cours + actualites, puis la synthese Sonnet pour toute la liste.",
-    )
-    st.caption(
-        "⏱️ Cours + actualites, puis synthese (Claude Sonnet). Compte 3 a 4 min, "
-        "garde l'app ouverte."
-        if config.secrets.anthropic_api_key
-        else "ANTHROPIC_API_KEY absente : synthese desactivee."
     )
 
     # Emplacement reserve pour l'export : rempli en fin de script (voir plus bas)
@@ -2156,16 +2131,12 @@ with st.sidebar:
             for w in config.warnings:
                 st.warning(w)
 
-# Les mises a jour s'executent AVANT le rendu de la page pour que les
-# tableaux affiches soient deja frais. Un seul des trois boutons peut etre
-# actif par run (Streamlit ne redessine que sur le clic qui vient d'avoir lieu).
-if btn_page:
-    afficher_compte_rendu(_maj_page_courante())
+# La mise a jour globale s'execute AVANT le rendu de la page pour que les
+# tableaux affiches soient deja frais. Les mises a jour scopees a une page
+# (voir page_cours, page_calendrier, page_news, page_instrument, page_briefing)
+# s'executent, elles, dans la page elle-meme, avant qu'elle ne lise ses donnees.
 if btn_donnees:
     afficher_compte_rendu(run_update(update_global, "Mise a jour globale"))
-if btn_donnees_analyse:
-    afficher_compte_rendu(run_update(update_global, "Mise a jour globale"))
-    afficher_compte_rendu_synthese(ecrire_synthese(config))
 
 # Flags calcules UNE fois par run, apres l'eventuelle mise a jour : ils
 # alimentent le menu des alertes ci-dessous et le tri de « Ma synthese ».

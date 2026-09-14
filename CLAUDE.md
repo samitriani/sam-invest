@@ -128,9 +128,9 @@ config.yaml ──> config.load_config() ──> AppConfig (watchlist + regles +
 
 `update.update_global` = donnees + news. La fonction elle-meme ne declenche
 **jamais** la synthese Sonnet ; c'est l'UI (`app.py`) qui enchaine
-`update_global` puis `ecrire_synthese` quand on clique sur « Mettre a jour
-donnees et analyse » — deux appels distincts, pas une fusion des deux
-fonctions.
+`update_global` puis `ecrire_synthese` quand on clique sur « 🧠 Lancer
+l'analyse » (page Ma synthese) — deux appels distincts, pas une fusion des
+deux fonctions.
 
 **Chaine de repli des sources** : yfinance d'abord (gratuit, sans cle), puis
 Finnhub, puis FMP — pour menager les quotas. Regle d'or de `data_sources.py` :
@@ -144,8 +144,8 @@ indisponible en aval.
 
 | Modele | Appele par | Quand | Ce qu'il produit |
 |---|---|---|---|
-| Haiku | `llm.classer_news` | menu ☰ : « MAJ page courante » (sur News) ou « Mettre a jour les donnees » | categorie, tonalite, resume FR, traduction du titre |
-| Sonnet | `llm.synthese_et_reco` | menu ☰ : « Mettre a jour donnees et analyse » | 1 SEUL appel pour le global + tous les instruments |
+| Haiku | `llm.classer_news` | page News : « 🔄 Actualiser cette page » ou menu ☰ : « Mettre a jour les donnees » | categorie, tonalite, resume FR, traduction du titre |
+| Sonnet | `llm.synthese_et_reco` | page Ma synthese : « 🧠 Lancer l'analyse » | 1 SEUL appel pour le global + tous les instruments |
 | Sonnet | `llm.generer_idees_thematiques` | bouton « Generer des suggestions » | tickers candidats (texte seul, valides ensuite par le code) |
 | Opus | `llm.conclusion_etape_stream`, `llm.exec_summary_diagnostic_stream` | bouton « Analyser » | conclusion par etape + executive summary |
 
@@ -198,15 +198,19 @@ par page, puis la navigation en fin de fichier.
   Streamlit en tete du menu, avant les sections nommees — c'est elle qui porte
   `Ma liste` ; `Aide` recoit sa propre section a un seul element pour rester en
   bas (Streamlit ne permet pas deux sections sans en-tete dans un seul menu).
-- **Trois boutons de mise a jour, dans le menu ☰, jamais sur une page** : « MAJ
-  page courante » (cible la page ouverte via `navigation.title`, lu **avant**
-  `navigation.run()` — desactive sur les pages hors groupe Donnees), « Mettre a
-  jour les donnees » (`update_global` : cours + news, jamais la synthese) et
-  « Mettre a jour donnees et analyse » (`update_global` puis `ecrire_synthese`,
-  desactive sans `ANTHROPIC_API_KEY`). Les trois s'executent **avant**
-  `navigation.run()`, comme les alertes, pour que la page rendue reflete deja
-  les donnees fraiches sans `st.rerun()`. Aucune page ne porte plus son propre
-  bouton d'actualisation — les eviter y ferait doublon.
+- **Chaque page qui affiche des donnees porte son propre bouton d'actualisation**
+  (« 🔄 Actualiser cette page » sur `Cours de bourse`, `Calendrier des
+  evenements`, `News`, `Vue entreprise` ; « 🧠 Lancer l'analyse » sur `Ma
+  synthese`, desactive sans `ANTHROPIC_API_KEY`). Le bouton est place en tete de
+  la fonction de page, **avant** le code qui lit les donnees qu'il rafraichit :
+  Streamlit rejoue la fonction entiere au clic, donc le reste de la page voit
+  deja les donnees fraiches sans `st.rerun()` — le meme principe que les
+  actions globales ci-dessous, applique a l'echelle d'une page. Seule la
+  mise a jour qui ne vise aucune page en particulier — « 🔄 Mettre a jour les
+  donnees » (`update_global` : cours + news, jamais la synthese, toute la
+  watchlist) — reste dans le menu ☰, executee **avant** `navigation.run()`
+  comme les alertes. Ne pas dupliquer un bouton de page dans le menu (ni
+  l'inverse) : une seule action, un seul endroit.
 - **Watchlist vide** -> `ecran_demarrage()` court-circuite la navigation. Ne pas
   afficher un menu et des tableaux vides a quelqu'un qui decouvre l'outil.
 - **Mobile d'abord** : usage principal = telephone. Les durees et les couts sont
