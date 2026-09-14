@@ -746,6 +746,42 @@ def titre_page(icone: str, titre: str, accroche: str) -> None:
 # --------------------------------------------------------------------------
 # PAGE DONNEES : prix + fondamentaux + signaux (aucun appel Claude)
 # --------------------------------------------------------------------------
+def _couleur_pct(x) -> str:
+    """Couleur markdown NATIVE Streamlit (`:green[...]`) pour une variation signee.
+
+    Pas de CSS custom : c'est la meme mecanique que le badge de reco
+    (`:{couleur}-badge[...]`), juste sans le badge.
+    """
+    if not isinstance(x, (int, float)):
+        return "gray"
+    return "green" if x > 0 else ("red" if x < 0 else "gray")
+
+
+def _ligne_cours(s) -> None:
+    """Une ligne compacte : ticker + cours + variation, jamais hors cadre.
+
+    Remplace l'ancien st.dataframe (10 colonnes) : sur un ecran de telephone
+    (~316 px utiles sur 375), il ne laissait voir que Ticker/Nom/Theme -
+    Cours, Seance % et Tendance, la raison d'etre de la page, restaient hors
+    champ. Faire defiler le tableau pour les atteindre perdait en plus le
+    ticker, rendant les chiffres illisibles. Ici tout tient dans la largeur :
+    ticker + cours + variation sur une ligne (`st.container(horizontal=True)`,
+    qui s'enroule sous 640 px via le CSS mobile), le reste en caption dessous.
+    """
+    cours = _fmt(s.last_price) if isinstance(s.last_price, (int, float)) else "n/d"
+    chg = s.change_pct
+    chg_txt = f"{chg:+.1f}%" if isinstance(chg, (int, float)) else "n/d"
+    with st.container(horizontal=True, vertical_alignment="center"):
+        st.markdown(f"**{s.instrument.ticker}**", width=64)
+        st.markdown(f"`{cours}`", width=88)
+        st.markdown(f":{_couleur_pct(chg)}[{chg_txt}]", width=64)
+    dd = s.drawdown_pct
+    dd_txt = f"{dd:+.0f}%" if isinstance(dd, (int, float)) else "n/d"
+    rsi_txt = f"{s.rsi_14:.0f}" if isinstance(s.rsi_14, (int, float)) else "n/d"
+    st.caption(f"{s.instrument.nom} · {s.tendance} · RSI {rsi_txt} ({s.rsi_etat}) "
+               f"· {dd_txt} depuis le plus-haut 52s")
+
+
 def page_cours():
     titre_page("📈", "Cours de bourse", "Ce qui a bouge aujourd'hui sur tes valeurs suivies.")
     caption_derniere_maj("donnees", "cours")
@@ -753,31 +789,6 @@ def page_cours():
         afficher_compte_rendu(run_update(update_donnees, "Mise a jour des donnees"))
 
     snaps = signals.construire_snapshots(config)
-
-    def _row(s) -> dict:
-        return {
-            "Ticker": s.instrument.ticker,
-            "Nom": s.instrument.nom,
-            "Theme": s.instrument.theme,
-            "Cours": s.last_price,
-            "Seance %": s.change_pct,
-            "Drawdown 52s %": s.drawdown_pct,
-            "Position 52s %": s.position_52w_pct,
-            "RSI 14": s.rsi_14,
-            "Etat RSI": s.rsi_etat,
-            "Tendance": s.tendance,
-        }
-
-    _g = glossaire.definition
-    _num_cfg = {
-        "Cours": st.column_config.NumberColumn(format="%.2f", help=_g("Cours")),
-        "Seance %": st.column_config.NumberColumn(format="%.1f", help=_g("Seance")),
-        "Drawdown 52s %": st.column_config.NumberColumn(format="%.1f", help=_g("Drawdown 52s")),
-        "Position 52s %": st.column_config.NumberColumn(format="%.0f", help=_g("Position 52s")),
-        "RSI 14": st.column_config.NumberColumn(format="%.0f", help=_g("RSI 14")),
-        "Etat RSI": st.column_config.TextColumn(help=_g("Etat RSI")),
-        "Tendance": st.column_config.TextColumn(help=_g("Tendance")),
-    }
 
     # Sections pliables : sur telephone, la page tient en un ecran de sommaire et
     # on ouvre ce qu'on veut lire. Streamlit garde l'etat plie/deplie pendant la
@@ -788,10 +799,11 @@ def page_cours():
             if not sous:
                 continue
             with st.expander(f"{type_label} ({len(sous)})", expanded=True):
-                df = pd.DataFrame([_row(s) for s in sous])
-                st.dataframe(df, use_container_width=True, hide_index=True,
-                             column_config=_num_cfg)
-        st.caption("Colonnes vides = lance une actualisation des cours.")
+                for i, s in enumerate(sous):
+                    if i:
+                        st.divider()
+                    _ligne_cours(s)
+        st.caption("n/d = donnees pas encore recuperees, lance une actualisation.")
     else:
         st.warning("Aucune valeur suivie : ajoute-en dans « Ma liste ».")
 
@@ -906,39 +918,54 @@ def bloc_marche(choix: str) -> None:
 
     Reserve aux valeurs de la watchlist : c'est la seule base qui alimente
     l'historique de prix et les fondamentaux en local.
+
+    Regle fondatrice de l'app (CLAUDE.md §1) : tout se declenche par un clic.
+    Cette page ne recupere donc des cours SANS clic que si ce ticker n'a JAMAIS
+    ete recupere (aucune ligne en base - la page serait sinon totalement vide a
+    la 1re visite, cf. le message d'ajout "les donnees se rempliront a la
+    premiere visite"). Si des cours existent deja mais datent d'hier, on les
+    affiche tels quels avec leur date : jamais d'appel reseau silencieux sur un
+    simple "pas d'aujourd'hui" - sur un reseau de transport degrade, l'ancienne
+    version bloquait la page derriere un spinner avant meme d'avoir montre ce
+    que la base contenait deja, avec le bouton « Actualiser » deja present juste
+    au-dessus pour le declencher a la demande.
     """
-    # --- Auto-recuperation : si les donnees de CET instrument ne sont pas du
-    # jour, on les recupere automatiquement (lui seul, pas toute la watchlist).
-    # Garde-fou : une seule tentative par instrument et par jour dans la session,
-    # pour ne pas re-interroger en boucle un ticker qui ne repond pas.
+    q_sel = db.get_quote(choix)
     aujourd_hui = datetime.now().strftime("%Y-%m-%d")
 
-    def _quote_du_jour(t: str) -> bool:
-        q = db.get_quote(t)
-        if not q or not q.get("asof"):
-            return False
+    # Garde-fou : une seule tentative par instrument et par jour dans la
+    # session, pour ne pas re-interroger en boucle un ticker qui ne repond pas.
+    if not q_sel or not q_sel.get("asof"):
+        tentatives = st.session_state.setdefault("auto_maj_donnees", {})
+        if tentatives.get(choix) != aujourd_hui:
+            tentatives[choix] = aujourd_hui
+            with st.spinner(f"Cours de {choix} jamais recuperes : recuperation..."):
+                cr_auto = update_donnees_instrument(config, choix)
+            if cr_auto.get("status") == "ok":
+                st.caption(f"✅ Cours de {choix} recuperes a l'instant.")
+                q_sel = db.get_quote(choix)
+            else:
+                st.warning(f"Impossible de recuperer les cours de {choix} "
+                           "(reseau/source ?). Reessaie via « 🔄 Actualiser "
+                           f"{choix} » ci-dessus.")
+
+    if q_sel and q_sel.get("asof"):
         try:
-            d = datetime.fromisoformat(str(q["asof"]))
+            d = datetime.fromisoformat(str(q_sel["asof"]))
             if d.tzinfo is not None:
                 d = d.astimezone()
-            return d.strftime("%Y-%m-%d") == aujourd_hui
+            a_jour = d.strftime("%Y-%m-%d") == aujourd_hui
         except Exception:
-            return False
-
-    tentatives = st.session_state.setdefault("auto_maj_donnees", {})
-    if not _quote_du_jour(choix) and tentatives.get(choix) != aujourd_hui:
-        tentatives[choix] = aujourd_hui
-        with st.spinner(f"Cours de {choix} pas a jour : recuperation automatique..."):
-            cr_auto = update_donnees_instrument(config, choix)
-        if cr_auto.get("status") == "ok":
-            st.caption(f"✅ Cours de {choix} recuperes a l'instant.")
+            a_jour = True  # date illisible : ne pas alarmer a tort
+        if a_jour:
+            st.caption(f"🕒 Cours de {choix} : maj {fmt_dt(q_sel['asof'])}.")
         else:
-            st.warning(f"Impossible de recuperer les cours de {choix} "
-                       "(reseau/source ?). Reessaie via « 🔄 Actualiser "
-                       f"{choix} » ci-dessus.")
-    q_sel = db.get_quote(choix)
-    if q_sel and q_sel.get("asof"):
-        st.caption(f"🕒 Cours de {choix} : maj {fmt_dt(q_sel['asof'])}.")
+            st.caption(f"🕒 Cours de {choix} : maj {fmt_dt(q_sel['asof'])} ⚠️ pas "
+                       f"d'aujourd'hui — clique « 🔄 Actualiser {choix} » "
+                       "ci-dessus pour rafraichir.")
+    else:
+        st.caption(f"Pas encore de cours pour {choix}. Clique « 🔄 Actualiser "
+                   f"{choix} » ci-dessus.")
 
     # --- Sous-partie 1 : cours ---
     st.markdown("#### Son cours")
@@ -1017,6 +1044,32 @@ def page_instrument():
                "tu suis.")
 
 
+def _synthese_perimee(synth_asof: str | None, don_asof: str | None, news_asof: str | None) -> bool:
+    """Vrai si les cours ou les news ont ete rafraichis APRES cette synthese.
+
+    Le texte le plus couteux de l'app (1 appel Sonnet) parle au PRESENT
+    ("un beau rebond aujourd'hui") sur des chiffres qui datent parfois de
+    plusieurs semaines, sans que rien ne le signale au-dessus du texte : seule
+    une caption grise en discret rappelait la date de generation, et rien ne la
+    comparait a la fraicheur des cours/news affichee juste au-dessus. Ce
+    controle-la, lui, sert precisement a decider s'il faut alarmer.
+    """
+    if not synth_asof:
+        return False
+
+    def _parse(v):
+        try:
+            dt = datetime.fromisoformat(str(v))
+            return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+        except Exception:
+            return None
+
+    s = _parse(synth_asof)
+    if not s:
+        return False
+    return any(d and d > s for d in (_parse(don_asof), _parse(news_asof)))
+
+
 # --------------------------------------------------------------------------
 # PAGE MA SYNTHESE : alertes (gratuites) + synthese redigee (a la demande)
 # --------------------------------------------------------------------------
@@ -1077,8 +1130,17 @@ def page_briefing():
     # Claude — melanger le texte et la surveillance chiffree revenait a afficher
     # deux fois la meme alerte sur un seul ecran.
     if st.session_state.get("synth_global"):
-        if st.session_state.get("synthese_asof"):
-            st.caption(f"Synthese basee sur les donnees du {fmt_dt(st.session_state['synthese_asof'])}.")
+        _synth_asof = st.session_state.get("synthese_asof")
+        if _synthese_perimee(_synth_asof, asof_donnees, asof_news):
+            # Au-dessus du texte, pas en caption discrete : c'est la lecture la
+            # plus couteuse de l'app, et elle parle au present ("aujourd'hui").
+            st.warning(
+                f"⚠️ Cette lecture date du **{fmt_dt(_synth_asof)}** : les cours "
+                "ou les actualites ont ete rafraichis depuis. Relance « 🧠 Lancer "
+                "l'analyse » ci-dessus pour une lecture a jour."
+            )
+        elif _synth_asof:
+            st.caption(f"Synthese basee sur les donnees du {fmt_dt(_synth_asof)}.")
         st.markdown(st.session_state["synth_global"])
     elif config.secrets.anthropic_api_key:
         st.caption("Clique sur « 🧠 Lancer l'analyse » ci-dessus pour la vue "
