@@ -1082,7 +1082,9 @@ def page_briefing():
     # deja en base : elle ne les rafraichit pas elle-meme. Pour une lecture a
     # jour, rafraichir d'abord via « 🔄 Mettre a jour donnees et analyse » dans
     # le menu ☰ (qui enchaine les deux), ou via les boutons des pages Cours de
-    # bourse / News.
+    # bourse / News. Ce contexte (duree, cout, comment tout rafraichir) vit
+    # dans le help= du bouton plutot qu'en caption permanente : la page ouvrait
+    # auparavant sur 3 blocs de texte gris avant tout contenu utile.
     donnees_fraiches, asof_donnees = fraicheur("donnees")
     news_fraiches, asof_news = fraicheur("news")
 
@@ -1090,21 +1092,21 @@ def page_briefing():
         return f"**{fmt_dt(asof) if asof else 'jamais'}**" + ("" if frais else " ⚠️")
 
     st.caption(
-        f"🕒 Cours : {_tag_fraicheur(donnees_fraiches, asof_donnees)} · "
-        f"Actualites : {_tag_fraicheur(news_fraiches, asof_news)} "
-        f"(⚠️ = plus vieux que {FRAICHEUR_MAX_H} h)."
+        f"🕒 Cours {_tag_fraicheur(donnees_fraiches, asof_donnees)} · "
+        f"Actualites {_tag_fraicheur(news_fraiches, asof_news)}"
     )
 
-    if st.button("🧠 Lancer l'analyse", use_container_width=True,
-                 disabled=not config.secrets.anthropic_api_key):
+    if st.button(
+        "🧠 Lancer l'analyse", use_container_width=True,
+        disabled=not config.secrets.anthropic_api_key,
+        help=("Synthese Claude Sonnet sur les cours/actualites deja recuperes "
+              "ci-dessus (ne les rafraichit pas elle-meme). Compte 2 a 3 min. "
+              "Pour tout rafraichir avant, utilise « 🔄 Mettre a jour donnees "
+              "et analyse » dans le menu ☰."
+              if config.secrets.anthropic_api_key
+              else "ANTHROPIC_API_KEY absente : synthese desactivee."),
+    ):
         afficher_compte_rendu_synthese(ecrire_synthese(config))
-    st.caption(
-        "⏱️ Synthese (Claude Sonnet) sur la base des cours/actualites deja "
-        "recuperes ci-dessus. Compte 2 a 3 min. Pour tout rafraichir avant, "
-        "utilise « 🔄 Mettre a jour donnees et analyse » dans le menu ☰."
-        if config.secrets.anthropic_api_key
-        else "ANTHROPIC_API_KEY absente : synthese desactivee."
-    )
 
     # --- Recuperation cross-appareil : le briefing genere est persiste en base (pas
     # seulement en session). Si cette session (nouvel appareil/navigateur) n'a encore
@@ -1144,12 +1146,10 @@ def page_briefing():
             st.caption(f"Synthese basee sur les donnees du {fmt_dt(_synth_asof)}.")
         st.markdown(st.session_state["synth_global"])
     elif config.secrets.anthropic_api_key:
-        st.caption("Clique sur « 🧠 Lancer l'analyse » ci-dessus pour la vue "
-                   "d'ensemble et les commentaires valeur par valeur.")
+        st.caption("Aucune synthese generee — clique « 🧠 Lancer l'analyse » ci-dessus.")
     else:
-        st.info("ANTHROPIC_API_KEY absente : briefing desactive, mais les donnees "
-                "par instrument ci-dessous restent valables, et les alertes du "
-                "menu ☰ aussi (elles sont calculees par le code, sans IA).")
+        st.caption("ANTHROPIC_API_KEY absente : briefing desactive, mais les "
+                   "donnees ci-dessous et les alertes du menu ☰ restent valables.")
 
     # =====================================================================
     # SECTION PAR INSTRUMENT
