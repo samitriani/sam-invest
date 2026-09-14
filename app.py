@@ -55,6 +55,7 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime, timezone
+from itertools import groupby
 
 import pandas as pd
 import streamlit as st
@@ -102,13 +103,21 @@ st.markdown(
     # Marges laterales reduites : plus de largeur utile pour les tableaux.
     "[data-testid=\"stMainBlockContainer\"]{padding-left:0.8rem;padding-right:0.8rem;"
     "padding-top:3rem;}"
-    # Titres compactes : moins de defilement pour atteindre le contenu.
+    # Titres compactes MAIS toujours au-dessus du corps de texte (16px) : h3/h4
+    # descendaient sous le corps (16.8px et 15.2px), la hierarchie de lecture ne
+    # tenait plus que sur la graisse. h3 porte le titre de CHAQUE page
+    # (titre_page) et h4 les sous-titres de section (« Son cours », etc.).
     "h1{font-size:1.45rem !important;} h2{font-size:1.2rem !important;}"
-    "h3{font-size:1.05rem !important;} h4{font-size:0.95rem !important;}"
+    "h3{font-size:1.3rem !important;} h4{font-size:1.05rem !important;}"
     # Metriques : 2 a 3 par ligne au lieu d'une pile verticale.
     "[data-testid=\"stMetric\"]{min-width:8.5rem;flex:1 1 8.5rem;}"
     "[data-testid=\"stMetricValue\"]{font-size:1.05rem;}"
     "[data-testid=\"stMetricLabel\"] p{font-size:0.72rem;}"
+    # Cibles tactiles >= 44px (Apple HIG) : les liens du menu (28px) et les
+    # boutons secondaires etaient sous le seuil, ratés au pouce en mouvement.
+    "[data-testid=\"stSidebarNavLink\"]{min-height:44px;}"
+    "[data-testid=\"stButton\"] button, [data-testid=\"stDownloadButton\"] button,"
+    "[data-testid=\"stFormSubmitButton\"] button{min-height:44px;}"
     "}"
     "</style>",
     unsafe_allow_html=True,
@@ -135,6 +144,19 @@ RECO_LABEL = {"achat": ("ACHAT", "green"), "garder": ("GARDER", "orange"),
 REGLE_LABEL = {"chute": "chute brutale", "technique": "signal technique",
                "degradation": "degradation", "evenement": "evenement",
                "revision": "revision d'estimations"}
+
+# Libelle de GROUPE (regle, detail) -> phrase courte, utilise quand plusieurs
+# valeurs partagent le meme declencheur (ex : baisse generalisee du marche qui
+# fait franchir le meme seuil de drawdown a huit tickers a la fois). Cle absente
+# -> repli sur REGLE_LABEL[regle] (voir _groupe_label). N'a pas besoin de couvrir
+# tous les (regle, detail) : seuls ceux qui gagnent a etre plus precis qu'un
+# simple REGLE_LABEL sont lists ici.
+GROUPE_LABEL = {
+    ("chute", "seance"): "chute brutale en seance",
+    ("chute", "drawdown_52s"): "chute depuis le plus-haut 52 semaines",
+    ("technique", "rsi"): "RSI extreme",
+    ("technique", "proche_bas_52s"): "proche du plus-bas 52 semaines",
+}
 
 
 # ==========================================================================
@@ -367,7 +389,11 @@ def rendre_menu_alertes(flags: list[dict]) -> None:
     else:
         label = "✅ Aucune alerte"
 
-    with st.expander(label, expanded=False):
+    # Ouvert par defaut des qu'il y a une vraie alerte (pas juste une info) :
+    # ouvrir le menu ☰ suffit alors a voir ce qui ne va pas, sans un 2e tap
+    # pour deplier — le menu de Streamlit prend deja toute la partie haute de
+    # la sidebar, inutile d'ajouter un geste de plus pour atteindre le detail.
+    with st.expander(label, expanded=bool(alertes)):
         if not visibles and not n_masquees:
             st.caption("Aucun signal en cours sur tes valeurs.")
             return
@@ -381,14 +407,6 @@ def rendre_menu_alertes(flags: list[dict]) -> None:
 
         # Alertes d'abord, infos ensuite : deux severites, un seul menu.
         #
-        # Chaque alerte tient sur deux lignes : une EN-TETE COURTE (ticker +
-        # regle) posee a cote de la croix, puis le detail chiffre en dessous, sur
-        # toute la largeur. Le message complet ne peut pas cohabiter avec un
-        # bouton dans une sidebar de ~240 px : il repoussait la croix sur sa
-        # propre ligne, en gros bouton pleine largeur. Cette forme se scanne
-        # aussi mieux quand il y a dix alertes : on lit des tickers, pas de la
-        # prose. Le detail reste affiche : un flag doit TOUJOURS montrer la
-        # valeur observee et son seuil.
         # Filet de securite : deux flags ne devraient jamais partager une cle
         # (cf. Flag.detail dans rules.py), mais si une future regle l'oublie,
         # un widget Streamlit duplique plante toute la page (StreamlitDuplicate
@@ -402,28 +420,65 @@ def rendre_menu_alertes(flags: list[dict]) -> None:
             vues.add(cle)
             a_afficher.append(f)
 
-        for f in a_afficher:
-            cle = flag_cle(f)
-            puce = "🔴" if f["severite"] == "alerte" else "🟡"
-            neuf = "🆕 " if _nouveau(f) else ""
-            regle = REGLE_LABEL.get(f["regle"], f["regle"])
+        def _detail_sans_ticker(f: dict) -> str:
             # Le message commence par « TICKER : » ; l'en-tete le porte deja.
             detail = f["message"]
             prefixe = f"{f['ticker']} : "
-            if detail.startswith(prefixe):
-                detail = detail[len(prefixe):]
-            depuis = (anc.get(cle) or {}).get("premiere_vue")
-            if depuis and not _nouveau(f):
-                detail += f" · depuis le {fmt_dt(depuis)}"
-            with st.container(horizontal=True, vertical_alignment="center"):
-                if st.button("✕", key=f"alerte_x_{cle}", width=40,
-                             help="Supprimer cette alerte"):
-                    db.masquer_flags([cle], asof, maintenant)
-                    st.rerun()
-                # Largeur explicite : sans elle le markdown reclame toute la
-                # place et fait passer la croix a la ligne.
-                st.markdown(f"{puce} {neuf}**{f['ticker']}** — {regle}", width=168)
-            st.caption(detail)
+            return detail[len(prefixe):] if detail.startswith(prefixe) else detail
+
+        def _bouton_x(cle: str, largeur: int = 40) -> bool:
+            if st.button("✕", key=f"alerte_x_{cle}", width=largeur,
+                         help="Supprimer cette alerte"):
+                db.masquer_flags([cle], asof, maintenant)
+                st.rerun()
+                return True
+            return False
+
+        # Regroupees par (regle, detail) : la meme regle declenchee sur
+        # plusieurs valeurs a la fois (ex : baisse generalisee du marche qui
+        # fait franchir le meme seuil de drawdown a huit tickers) affichait
+        # sinon huit fois le meme intitule en gras ("— chute brutale"),
+        # noyant le compte de tickers distincts sous du texte redondant. Une
+        # regle isolee (un seul ticker touche) garde le format detaille
+        # d'origine : rien a compresser, et le contexte complet reste utile.
+        def _cle_groupe(f: dict) -> tuple[int, str, str]:
+            rang_severite = 0 if f["severite"] == "alerte" else 1
+            return (rang_severite, f["regle"], f.get("detail", ""))
+
+        a_afficher.sort(key=_cle_groupe)
+        for (_, regle, detail_type), membres in groupby(a_afficher, key=_cle_groupe):
+            membres = list(membres)
+            if len(membres) == 1:
+                f = membres[0]
+                cle = flag_cle(f)
+                puce = "🔴" if f["severite"] == "alerte" else "🟡"
+                neuf = "🆕 " if _nouveau(f) else ""
+                regle_label = REGLE_LABEL.get(regle, regle)
+                detail = _detail_sans_ticker(f)
+                depuis = (anc.get(cle) or {}).get("premiere_vue")
+                if depuis and not _nouveau(f):
+                    detail += f" · depuis le {fmt_dt(depuis)}"
+                with st.container(horizontal=True, vertical_alignment="center"):
+                    _bouton_x(cle)
+                    # Largeur explicite : sans elle le markdown reclame toute
+                    # la place et fait passer la croix a la ligne.
+                    st.markdown(f"{puce} {neuf}**{f['ticker']}** — {regle_label}", width=168)
+                st.caption(detail)
+            else:
+                puce = "🔴" if membres[0]["severite"] == "alerte" else "🟡"
+                label_groupe = GROUPE_LABEL.get((regle, detail_type),
+                                                REGLE_LABEL.get(regle, regle))
+                st.markdown(f"{puce} **{label_groupe}** ({len(membres)})")
+                # Une ligne par ticker : le libelle de regle, deja dans l'en-tete
+                # du groupe, ne se repete plus - seule la valeur (differente
+                # pour chacun) reste affichee, comme l'exige CLAUDE.md (chaque
+                # flag montre la valeur observee ET le seuil).
+                for f in membres:
+                    cle = flag_cle(f)
+                    neuf = "🆕 " if _nouveau(f) else ""
+                    with st.container(horizontal=True, vertical_alignment="center"):
+                        _bouton_x(cle, largeur=32)
+                        st.caption(f"{neuf}**{f['ticker']}** {_detail_sans_ticker(f)}")
 
         # Le compte des masquees n'est rappele ici que s'il reste des alertes
         # visibles : quand tout est masque, le libelle du menu le dit deja.
@@ -633,9 +688,28 @@ def afficher_avis_analystes(ticker: str) -> None:
         st.caption("Aucun changement d'avis d'analyste sur les 90 derniers jours.")
 
 
-def rendre_news(n: dict, a: dict | None = None, compact: bool = False) -> None:
+def _premiere_phrase(texte: str, max_len: int = 220) -> str:
+    """Premiere phrase d'un resume, pour l'affichage au repos.
+
+    Coupure simple sur '. ' - pas de NLP, une heuristique suffit pour un
+    resume de 3 a 5 phrases deja redige par Haiku (voir rendre_news : le
+    reste vient derriere une case a cocher, pas impose a l'ecran).
+    """
+    fin = texte.find(". ")
+    phrase = texte[:fin + 1] if fin != -1 else texte
+    return phrase if len(phrase) <= max_len else phrase[:max_len].rstrip() + "…"
+
+
+def rendre_news(n: dict, a: dict | None = None, compact: bool = False,
+                key_prefix: str = "") -> None:
     """Affiche une news : titre (traduit FR si dispo) + categorie/tonalite,
-    resume source traduit (mode complet), et lien vers l'article original."""
+    resume source traduit (mode complet), et lien vers l'article original.
+
+    `key_prefix` (mode complet) identifie l'article de facon unique (ex :
+    "NVDA_3") pour la case a cocher « Lire le resume complet » - sans lui, on
+    affiche le resume complet d'emblee plutot que de planter sur une cle
+    dupliquee.
+    """
     head = n.get("headline", "")
     # Titre francais si Haiku l'a traduit, sinon le titre original.
     titre = ((a.get("titre_fr") or "").strip() if a else "") or head
@@ -660,7 +734,19 @@ def rendre_news(n: dict, a: dict | None = None, compact: bool = False) -> None:
         resume_fr = (a.get("resume_fr") or "").strip() if a else ""
         resume = resume_haiku or resume_fr or (n.get("summary") or "").strip()
         if resume:
-            st.write(resume if len(resume) <= 900 else resume[:900].rstrip() + "…")
+            complet = resume if len(resume) <= 900 else resume[:900].rstrip() + "…"
+            premiere = _premiere_phrase(resume)
+            # Un resume developpe (3 a 5 phrases) prenait un ecran entier par
+            # article sur telephone ; seule la 1re phrase reste visible au
+            # repos, le reste derriere une case a cocher plutot qu'un
+            # expander (interdit ici : on est deja dans un expander par
+            # instrument, et Streamlit ne les imbrique pas).
+            if premiere.strip() == complet.strip() or not key_prefix:
+                st.write(complet)
+            else:
+                voir_plus = st.checkbox("Lire le resume complet",
+                                        key=f"news_full_{key_prefix}")
+                st.write(complet if voir_plus else premiere)
 
     if n.get("url"):
         suffix = f"  ·  _{meta_txt}_" if meta_txt else ""
@@ -687,6 +773,27 @@ def _analyses_news(ticker: str) -> dict:
         return {}
 
 
+def _trier_news(raw: list[dict], analyses: dict) -> list[dict]:
+    """Tonalite marquante (positif/negatif) d'abord, categorie 'autre' (souvent
+    hors-sujet - certains resumes le disent eux-memes explicitement) en
+    dernier, le reste entre les deux ; le plus recent en tete au sein d'un
+    meme rang. Le classement Haiku est deja paye : autant s'en servir pour
+    hierarchiser l'affichage, pas seulement pour decorer le titre.
+    """
+    def _rang(n: dict) -> int:
+        a = analyses.get(n.get("headline", ""))
+        if not a:
+            return 1
+        if a.get("tonalite") in ("positif", "negatif"):
+            return 0
+        if a.get("categorie") == "autre":
+            return 2
+        return 1
+
+    par_date = sorted(raw, key=lambda n: n.get("datetime", ""), reverse=True)
+    return sorted(par_date, key=_rang)  # tri stable : la date reste l'ordre secondaire
+
+
 def bloc_news_entreprise(ticker: str) -> None:
     """Toutes les actualites connues d'UNE entreprise."""
     raw = db.get_news(ticker)
@@ -695,10 +802,12 @@ def bloc_news_entreprise(ticker: str) -> None:
                    "Va sur News et lance « 🔄 Actualiser cette page ».")
         return
     analyses = _analyses_news(ticker)
+    raw = _trier_news(raw, analyses)
     for i, n in enumerate(raw):
         if i:
             st.divider()
-        rendre_news(n, analyses.get(n.get("headline", "")), compact=False)
+        rendre_news(n, analyses.get(n.get("headline", "")), compact=False,
+                   key_prefix=f"{ticker}_{i}")
 
 
 def fil_actualites() -> None:
@@ -721,11 +830,13 @@ def fil_actualites() -> None:
     groupes.sort(key=lambda g: g[0], reverse=True)
     for _derniere, inst, raw in groupes:
         analyses = _analyses_news(inst.ticker)
+        raw = _trier_news(raw, analyses)
         with st.expander(f"{inst.ticker} — {inst.nom} ({len(raw)})"):
             for i, n in enumerate(raw):
                 if i:
                     st.divider()
-                rendre_news(n, analyses.get(n.get("headline", "")), compact=False)
+                rendre_news(n, analyses.get(n.get("headline", "")), compact=False,
+                           key_prefix=f"{inst.ticker}_{i}")
 
 
 def titre_page(icone: str, titre: str, accroche: str) -> None:
@@ -833,14 +944,25 @@ def page_calendrier():
                 return "passe"
             return "auj." if j == 0 else ("demain" if j == 1 else f"{j} j")
 
+        def _plus_proche(v) -> int:
+            """Jours avant la PLUS PROCHE echeance a venir (resultats ou
+            ex-dividende), pour trier la table sur ce qui approche plutot que
+            sur l'ordre de la watchlist. Une valeur sans aucune echeance a
+            venir (tout est passe/n-d) est repoussee en fin de liste."""
+            candidats = [j for j in (v.jours_avant_resultats, v.jours_avant_exdiv)
+                        if j is not None and j >= 0]
+            return min(candidats) if candidats else 10_000
+
+        vues = sorted(vues, key=_plus_proche)
+
         cal_rows, est_rows = [], []
         for v in vues:
             cal_rows.append({
                 "Ticker": v.instrument.ticker,
-                "Resultats": v.earnings_date or "n/d",
-                "Dans": _jours(v.jours_avant_resultats),
-                "Ex-dividende": v.exdiv_date or "n/d",
-                "Dans ": _jours(v.jours_avant_exdiv),
+                "Resultats": _fmt_date_iso(v.earnings_date) if v.earnings_date else "n/d",
+                "Resultats dans": _jours(v.jours_avant_resultats),
+                "Ex-dividende": _fmt_date_iso(v.exdiv_date) if v.exdiv_date else "n/d",
+                "Ex-div dans": _jours(v.jours_avant_exdiv),
             })
             ar = db.get_analyst_ratings(v.instrument.ticker)
             # Consensus condense : achat fort + achat / conserver / vendre + vendre fort.
@@ -865,7 +987,10 @@ def page_calendrier():
                 "Consensus": consensus_txt,
                 "Potentiel %": v.potentiel_pct,
             })
-        with st.expander("Calendrier", expanded=False):
+        # Ouvert par defaut : c'est le contenu principal de la page, pas un
+        # detail secondaire - la page affichait sinon deux sections repliees
+        # et zero information a l'ouverture.
+        with st.expander("Calendrier", expanded=True):
             st.dataframe(pd.DataFrame(cal_rows), use_container_width=True, hide_index=True)
         with st.expander("Estimations, revisions & consensus", expanded=False):
             st.dataframe(
@@ -1206,7 +1331,31 @@ def page_briefing():
         reco_rank = {"vendre": 0, "garder": 1, "achat": 2}.get(reco, 3)
         return (sev_rank, reco_rank, inst.ticker)
 
-    for inst in sorted(config.watchlist, key=_tri_instrument):
+    # Intertitres de section : le tri ci-dessus porte deja l'urgence (nouvelle
+    # alerte > alerte > info > rien), mais rien a l'ecran ne le disait - 23
+    # expanders visuellement identiques dont le seul ordre encodait la
+    # priorite. Un st.expander ne peut pas porter un filet colore par
+    # instance sans CSS par-instrument (hors de portee du bloc CSS global) ;
+    # un intertitre au-dessus du premier groupe concerne fait le meme travail
+    # sans rien ajouter au design system.
+    _ordonnes = sorted(config.watchlist, key=_tri_instrument)
+
+    def _groupe(inst) -> int:
+        sev_rank = _tri_instrument(inst)[0]
+        return 0 if sev_rank in (0, 1) else (1 if sev_rank == 2 else 2)
+
+    _GROUPE_LABEL = {0: "🔴 À regarder en premier", 1: "🟡 À surveiller"}
+    _compte_groupe: dict[int, int] = {}
+    for inst in _ordonnes:
+        g = _groupe(inst)
+        _compte_groupe[g] = _compte_groupe.get(g, 0) + 1
+    _groupes_titres: set[int] = set()
+
+    for inst in _ordonnes:
+        groupe = _groupe(inst)
+        if groupe in _GROUPE_LABEL and groupe not in _groupes_titres:
+            _groupes_titres.add(groupe)
+            st.markdown(f"##### {_GROUPE_LABEL[groupe]} ({_compte_groupe[groupe]})")
         t = inst.ticker
         entry = synth_inst.get(t) or {}
         # Le badge de reco (mot + couleur) est le SEUL marqueur du titre : pas de
@@ -1402,13 +1551,21 @@ def section_analyse(ticker: str) -> None:
         return
 
     if stocke:
-        c1, c2 = st.columns([3, 1])
-        relancer = c1.button("🔄 Refaire l'analyse", use_container_width=True,
+        relancer = st.button("🔄 Refaire l'analyse", use_container_width=True,
                              help="Reprend les comptes les plus recents. Compte une minute.")
-        if c2.button("🗑️ Oublier", use_container_width=True,
-                     help="Supprime l'analyse conservee pour cette entreprise"):
-            db.supprimer_diagnostic(ticker)
-            st.rerun()
+        # « Oublier » derriere un popover (pas un 2e bouton pleine largeur a
+        # cote de « Refaire l'analyse ») : les deux se retrouvaient de la
+        # meme taille, empiles sur mobile - le pouce ratait facilement le bon.
+        # La confirmation dans le popover evite en plus le tap accidentel sur
+        # une analyse qui a coute un appel Opus.
+        with st.popover("🗑️ Oublier cette analyse"):
+            st.caption(f"Supprime l'analyse conservee pour {ticker}. Elle "
+                       "pourra etre refaite, mais consommera un nouvel appel "
+                       "Claude.")
+            if st.button("Confirmer la suppression", type="primary",
+                         key=f"confirmer_oubli_{ticker}"):
+                db.supprimer_diagnostic(ticker)
+                st.rerun()
         lancer = relancer
     else:
         st.caption("Sept etapes — marges, rentabilite, creation de valeur, solidite, "
@@ -1468,9 +1625,15 @@ def selecteur_analyse() -> str | None:
 
     if not noms:
         return None
+    # index=None : rien n'est pre-selectionne. Sans ca, le 1er ticker du dict
+    # (souvent la derniere analyse conservee) se retrouvait choisi d'office et
+    # deroulait aussitot sept etapes d'analyse - 7000 px - sans qu'on ait
+    # rien demande. Un choix explicite reste memorise (session_state) une
+    # fois fait.
     return st.selectbox("Entreprise a analyser", list(noms),
                         format_func=lambda t: f"{t} — {noms[t]}",
-                        key="analyse_ticker")
+                        key="analyse_ticker", index=None,
+                        placeholder="Choisis parmi les analyses recentes ou tes valeurs suivies…")
 
 
 def page_analyser():
@@ -1808,8 +1971,8 @@ def page_watchlist():
         st.info("Liste vide. Utilise la recherche ci-dessus ou « Ajouter "
                 "manuellement » pour ajouter ton premier instrument.")
     else:
-        st.caption("Modifie le **theme** de chaque ligne puis clique 💾 en bas. "
-                   "Le bouton 🗑️ retire immediatement la ligne.")
+        st.caption("Chaque champ s'enregistre des que tu le quittes, comme la "
+                   "corbeille 🗑️ : rien d'autre a valider.")
 
         def _wl_rows(skip: str | None = None) -> list[dict]:
             """Reconstruit la liste depuis les champs edites (session_state)."""
@@ -1825,40 +1988,48 @@ def page_watchlist():
                 })
             return out
 
-        # Une ligne = un conteneur horizontal (et NON st.columns) : sur telephone
-        # les champs s'enroulent en 2 lignes au lieu de s'empiler en 5 champs
-        # anonymes. Chaque champ porte un placeholder qui l'identifie une fois
-        # empile, et le ticker (non modifiable) ouvre toujours la ligne.
-        for it in config.watchlist:
-            with st.container(horizontal=True, vertical_alignment="center"):
-                # Largeurs calees pour qu'un telephone (375 px) affiche la ligne en
-                # 2 rangees : [ticker][nom] puis [type][theme][🗑️].
-                st.text_input("Ticker", value=it.ticker, key=f"wl_tk_{it.ticker}",
-                              disabled=True, label_visibility="collapsed", width=100)
-                st.text_input("Nom", value=it.nom, key=f"wl_nom_{it.ticker}",
-                              placeholder="Nom", label_visibility="collapsed", width=210)
-                st.selectbox("Type", ["action", "ETF"],
-                             index=1 if str(it.type).lower() in ("etf", "fund", "fonds") else 0,
-                             key=f"wl_type_{it.ticker}", label_visibility="collapsed", width=105)
-                st.text_input("Theme", value=it.theme, key=f"wl_theme_{it.ticker}",
-                              placeholder="Theme (ex : Tech)", label_visibility="collapsed",
-                              width=170)
-                if st.button("🗑️", key=f"wl_del_{it.ticker}",
-                             help=f"Retirer {it.ticker} de la watchlist"):
-                    save_watchlist(_wl_rows(skip=it.ticker))
-                    st.session_state["wl_flash_ok"] = f"{it.ticker} retire de la watchlist."
-                    st.rerun()
+        def _wl_autosave() -> None:
+            """Callback on_change : enregistre TOUTE la liste des qu'un champ
 
-        st.write("")
-        btn_save = st.button("💾 Enregistrer les modifications",
-                             use_container_width=True, type="primary")
-        st.caption("Enregistre les changements de nom / type / theme. Seule la liste "
-                   "est reecrite dans config.yaml ; les seuils et regles sont preserves.")
+            (nom/type/theme) perd le focus ou change. Remplace l'ancien bouton
+            « 💾 Enregistrer » qui, sur une longue liste, se retrouvait a
+            plusieurs ecrans du champ qu'on venait de modifier - on risquait de
+            faire defiler jusqu'en bas puis d'oublier de cliquer. Meme logique
+            que la corbeille, qui a toujours agi immediatement.
+            """
+            save_watchlist(_wl_rows())
 
-        if btn_save:
-            n = save_watchlist(_wl_rows())
-            st.session_state["wl_flash_ok"] = f"Watchlist enregistree : {n} instrument(s)."
-            st.rerun()  # recharge config.yaml pour rafraichir toute l'app
+        # Repliee par defaut au-dela de 10 valeurs : consulter la liste (le
+        # geste courant) ne doit pas imposer de faire defiler 20+ lignes
+        # d'edition (152 px chacune) avant d'atteindre le reste de la page.
+        with st.expander(f"📋 {len(config.watchlist)} instrument(s)",
+                         expanded=len(config.watchlist) <= 10):
+            # Une ligne = un conteneur horizontal (et NON st.columns) : sur
+            # telephone les champs s'enroulent en 2 lignes au lieu de
+            # s'empiler en 5 champs anonymes. Chaque champ porte un
+            # placeholder qui l'identifie une fois empile, et le ticker (non
+            # modifiable) ouvre toujours la ligne.
+            for it in config.watchlist:
+                with st.container(horizontal=True, vertical_alignment="center"):
+                    # Largeurs calees pour qu'un telephone (375 px) affiche la
+                    # ligne en 2 rangees : [ticker][nom] puis [type][theme][🗑️].
+                    st.text_input("Ticker", value=it.ticker, key=f"wl_tk_{it.ticker}",
+                                  disabled=True, label_visibility="collapsed", width=100)
+                    st.text_input("Nom", value=it.nom, key=f"wl_nom_{it.ticker}",
+                                  placeholder="Nom", label_visibility="collapsed",
+                                  width=210, on_change=_wl_autosave)
+                    st.selectbox("Type", ["action", "ETF"],
+                                 index=1 if str(it.type).lower() in ("etf", "fund", "fonds") else 0,
+                                 key=f"wl_type_{it.ticker}", label_visibility="collapsed",
+                                 width=105, on_change=_wl_autosave)
+                    st.text_input("Theme", value=it.theme, key=f"wl_theme_{it.ticker}",
+                                  placeholder="Theme (ex : Tech)", label_visibility="collapsed",
+                                  width=170, on_change=_wl_autosave)
+                    if st.button("🗑️", key=f"wl_del_{it.ticker}",
+                                 help=f"Retirer {it.ticker} de la watchlist"):
+                        save_watchlist(_wl_rows(skip=it.ticker))
+                        st.session_state["wl_flash_ok"] = f"{it.ticker} retire de la watchlist."
+                        st.rerun()
 
     st.divider()
     _section_suggestions()
