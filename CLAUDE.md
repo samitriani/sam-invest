@@ -141,7 +141,11 @@ perdait des que le telephone passait en arriere-plan. `global_analyse` =
 regenerer le texte sur les donnees deja en base sans payer un rafraichissement.
 
 **Etat d'un cycle** : table `refresh_etat` (une ligne : `en_cours` | `interrompu`
-| `termine`, progression, resume, details). C'est elle, pas la session
+| `termine`, `etapes`, resume, details). `etapes` est un JSON par etape
+(`donnees`, `news`, `synthese` : `etat` hors | attente | en_cours | ok | partiel |
+echec, `fait`, `total`, `phase`) ecrit par `db.maj_etape_refresh`. Le compteur
+final compte les instruments **sans erreur** : un ETF sans news recente n'est pas
+un manque. C'est elle, pas la session
 Streamlit, qui dit ou en est un rafraichissement : `db.demarrer_refresh` est
 aussi le **verrou** (un seul cycle a la fois, transaction IMMEDIATE) et
 `db.etat_refresh` requalifie en `interrompu` un `en_cours` muet depuis plus de
@@ -232,7 +236,10 @@ par page, puis la navigation en fin de fichier.
   `global_analyse` — le seul bouton qui enchaine tout en un clic).
   **Les boutons d'actualisation ne bloquent plus** : `declencher_refresh` lance le
   thread puis `st.rerun()`, et `bandeau_refresh` (juste avant `navigation.run()`)
-  affiche l'etat lu en base ; un `st.fragment(run_every="3s")` le tient a jour
+  affiche l'etat lu en base, en **trois lignes fixes** (Donnees / News / Synthese,
+  « — » pour une etape hors du cycle lance, aucune phrase : une etape restee
+  `en_cours` dans un cycle `interrompu` s'affiche « coupee », deduit au rendu) ;
+  un `st.fragment(run_every="3s")` le tient a jour
   et recharge toute la page a la fin du cycle. Les boutons sont desactives
   (`CYCLE_VIVANT`) tant qu'un cycle tourne. Seule l'actualisation d'UN
   instrument (page Vue entreprise, ~10 s) reste synchrone (`run_update`).

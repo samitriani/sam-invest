@@ -191,9 +191,7 @@ def afficher_compte_rendu(cr: dict) -> None:
 # Le travail tourne dans un thread serveur (update.lancer_refresh_arriere_plan),
 # donc une coupure du telephone ne l'arrete pas. L'etat vit en base : on l'affiche
 # ici au lieu d'un spinner bloquant, et il se retrouve a la reouverture.
-LIBELLE_CYCLE = {"donnees": "des cours", "news": "des actualites",
-                 "global": "des cours et actualites",
-                 "global_analyse": "des cours, actualites et de la synthese"}
+ETAPES_BANDEAU = (("donnees", "Donnees"), ("news", "News"), ("synthese", "Synthese"))
 
 
 def refresh_en_cours() -> bool:
@@ -209,15 +207,52 @@ def declencher_refresh(kind: str) -> None:
         st.rerun()
 
 
+def _ligne_etape(cle: str, libelle: str, info: dict, interrompu: bool) -> str:
+    """Une etape du bandeau : statut + compteur, jamais de phrase.
+
+    Dans un cycle interrompu, une etape restee 'en_cours' est une etape COUPEE et
+    une etape 'attente' n'a jamais ete lancee : deduit ici, rien n'est reecrit en
+    base apres la coupure (le thread peut etre mort).
+    """
+    etat = info.get("etat", "hors")
+    fait, total = info.get("fait"), info.get("total")
+    # La synthese est un seul appel : pas de compteur parlant a afficher.
+    compteur = f"{fait}/{total}" if total and cle != "synthese" else ""
+    if etat == "hors":
+        statut = "—"
+    elif interrompu and etat == "en_cours":
+        statut = f"❌ coupee a {compteur}" if compteur else "❌ coupee"
+    elif interrompu and etat == "attente":
+        statut = "· non lancee"
+    elif etat == "attente":
+        statut = "· en attente"
+    elif etat == "en_cours":
+        statut = "⏳ " + (f"classement {compteur}" if info.get("phase") == "classement"
+                         else compteur)
+    else:
+        icone = {"ok": "✅", "partiel": "⚠️", "echec": "❌"}.get(etat, "")
+        statut = f"{icone} {compteur}"
+    return f"**{libelle}** {statut}".rstrip()
+
+
+def _bloc_etat(e: dict) -> str:
+    interrompu = e["statut"] == "interrompu"
+    titre = {"en_cours": "**Mise a jour en cours**",
+             "interrompu": "**Mise a jour interrompue**"}.get(
+        e["statut"], f"**Mise a jour terminee** · {fmt_dt(e['maj'])}")
+    etapes = e.get("etapes") or {}
+    lignes = [_ligne_etape(cle, lib, etapes.get(cle, {}), interrompu)
+              for cle, lib in ETAPES_BANDEAU]
+    return "  \n".join([titre] + lignes)
+
+
 @st.fragment(run_every="3s")
 def _etat_refresh_vivant() -> None:
     e = db.etat_refresh()
     if not e or e["statut"] != "en_cours":
         st.rerun()  # cycle fini : recharge toute la page sur les donnees fraiches
         return
-    st.info(f"⏳ Mise a jour {LIBELLE_CYCLE.get(e['kind'], '')} en cours — "
-            f"{e.get('progression') or 'demarrage'}. Elle continue sur le serveur : "
-            "tu peux quitter l'app et revenir.")
+    st.info(_bloc_etat(e))
 
 
 def bandeau_refresh() -> None:
@@ -227,20 +262,19 @@ def bandeau_refresh() -> None:
     if e["statut"] == "en_cours":
         _etat_refresh_vivant()
     elif e["statut"] == "interrompu":
-        st.warning(f"⚠️ La derniere mise a jour {LIBELLE_CYCLE.get(e['kind'], '')} a ete "
-                   f"interrompue ({e.get('progression') or 'avant la fin'}). Ce qui etait "
-                   "deja recupere est conserve ; relance-la si besoin.")
+        st.warning(_bloc_etat(e))
     elif st.session_state.get("refresh_vu") != e["debut"]:
         st.session_state["refresh_vu"] = e["debut"]  # compte rendu : une fois par session
-        msg = f"Mise a jour terminee le {fmt_dt(e['maj'])}. {e.get('resume') or ''}"
-        (st.warning if "manquante" in msg else st.success)(msg)
+        manque = any(i.get("etat") in ("partiel", "echec")
+                     for i in (e.get("etapes") or {}).values())
+        (st.warning if manque else st.success)(_bloc_etat(e))
         try:
-            lignes = json.loads(e.get("details") or "[]")
+            details = json.loads(e.get("details") or "[]")
         except Exception:
-            lignes = []
-        if lignes:
+            details = []
+        if details:
             with st.expander("Detail par instrument"):
-                for d in lignes:
+                for d in details:
                     st.text(d)
 
 

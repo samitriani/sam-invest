@@ -14,6 +14,7 @@ Couche donnees pure. Tables :
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -120,8 +121,8 @@ CREATE TABLE IF NOT EXISTS refresh_etat (
     statut      TEXT NOT NULL,         -- 'en_cours' | 'interrompu' | 'termine'
     kind        TEXT NOT NULL,         -- 'donnees' | 'news' | 'global' | 'global_analyse'
     debut       TEXT NOT NULL,         -- ISO UTC : lancement du cycle
-    maj         TEXT NOT NULL,         -- ISO UTC : derniere progression ecrite
-    progression TEXT,                  -- libelle court affichable ("News 12/20")
+    maj         TEXT NOT NULL,         -- ISO UTC : derniere ecriture d'etat (heartbeat)
+    etapes      TEXT,                  -- JSON : {donnees|news|synthese: {etat, fait, total, phase}}
     resume      TEXT,                  -- compte rendu une fois le cycle clos
     details     TEXT                   -- JSON : lignes « Detail par instrument » du cycle
 );
@@ -184,6 +185,10 @@ def init_db() -> None:
         dcols = [r[1] for r in conn.execute("PRAGMA table_info(diagnostic_cache)").fetchall()]
         if dcols and "reco" not in dcols:
             conn.execute("ALTER TABLE diagnostic_cache ADD COLUMN reco TEXT")
+        # Meme piege pour refresh_etat : `etapes` remplace l'ancienne chaine `progression`.
+        rcols = [r[1] for r in conn.execute("PRAGMA table_info(refresh_etat)").fetchall()]
+        if rcols and "etapes" not in rcols:
+            conn.execute("ALTER TABLE refresh_etat ADD COLUMN etapes TEXT")
 
 
 # --------------------------------------------------------------------------
@@ -334,6 +339,18 @@ def log_update(asof: str, kind: str, status: str, detail: str) -> None:
 DELAI_REFRESH_PERIME_S = 600
 
 
+# Les trois etapes d'un cycle, dans l'ordre d'affichage, et celles que chaque kind
+# fait tourner : les autres sont 'hors' cycle (affichees « — », jamais masquees).
+ETAPES = ("donnees", "news", "synthese")
+_ETAPES_PAR_KIND = {"donnees": ("donnees",), "news": ("news",),
+                    "global": ("donnees", "news"), "global_analyse": ETAPES}
+
+
+def _etapes_initiales(kind: str) -> dict:
+    actives = _ETAPES_PAR_KIND.get(kind, ())
+    return {e: {"etat": "attente" if e in actives else "hors"} for e in ETAPES}
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -374,13 +391,13 @@ def demarrer_refresh(kind: str, maintenant: datetime | None = None) -> bool:
             return False
         ts = _iso(maintenant)
         conn.execute(
-            """INSERT INTO refresh_etat (id, statut, kind, debut, maj, progression, resume, details)
-               VALUES (1, 'en_cours', ?, ?, ?, 'Demarrage...', NULL, NULL)
+            """INSERT INTO refresh_etat (id, statut, kind, debut, maj, etapes, resume, details)
+               VALUES (1, 'en_cours', ?, ?, ?, ?, NULL, NULL)
                ON CONFLICT(id) DO UPDATE SET
                  statut='en_cours', kind=excluded.kind, debut=excluded.debut,
-                 maj=excluded.maj, progression=excluded.progression, resume=NULL,
+                 maj=excluded.maj, etapes=excluded.etapes, resume=NULL,
                  details=NULL""",
-            (kind, ts, ts),
+            (kind, ts, ts, json.dumps(_etapes_initiales(kind))),
         )
         conn.commit()
         return True
@@ -391,11 +408,33 @@ def demarrer_refresh(kind: str, maintenant: datetime | None = None) -> bool:
         conn.close()
 
 
-def maj_progression_refresh(progression: str, maintenant: datetime | None = None) -> None:
+def maj_etape_refresh(etape: str, etat: str, fait: int | None = None, total: int | None = None,
+                      phase: str | None = None, maintenant: datetime | None = None) -> None:
+    """Ecrit l'etat d'UNE etape du cycle en cours (remplace son entree entiere).
+
+    etat : 'attente' | 'en_cours' | 'ok' | 'partiel' | 'echec'. Sans effet hors d'un
+    cycle 'en_cours'. Sert aussi de heartbeat : elle avance `maj`, que la
+    requalification des cycles fantomes lit.
+    """
     with get_conn() as conn:
+        row = conn.execute("SELECT statut, etapes FROM refresh_etat WHERE id = 1").fetchone()
+        if not row or row["statut"] != "en_cours":
+            return
+        try:
+            etapes = json.loads(row["etapes"] or "{}")
+        except Exception:
+            etapes = {}
+        info: dict = {"etat": etat}
+        if fait is not None:
+            info["fait"] = fait
+        if total is not None:
+            info["total"] = total
+        if phase:
+            info["phase"] = phase
+        etapes[etape] = info
         conn.execute(
-            "UPDATE refresh_etat SET progression = ?, maj = ? WHERE id = 1 AND statut = 'en_cours'",
-            (progression, _iso(maintenant or _utc_now())),
+            "UPDATE refresh_etat SET etapes = ?, maj = ? WHERE id = 1",
+            (json.dumps(etapes), _iso(maintenant or _utc_now())),
         )
 
 
@@ -415,7 +454,14 @@ def etat_refresh(maintenant: datetime | None = None) -> dict | None:
     with get_conn() as conn:
         _requalifier_si_perime(conn, maintenant or _utc_now())
         row = conn.execute("SELECT * FROM refresh_etat WHERE id = 1").fetchone()
-        return dict(row) if row else None
+        if not row:
+            return None
+        etat = dict(row)
+        try:
+            etat["etapes"] = json.loads(etat.get("etapes") or "{}")
+        except Exception:
+            etat["etapes"] = {}
+        return etat
 
 
 def save_briefing_cache(generated_at: str, donnees_asof: str | None, news_asof: str | None,

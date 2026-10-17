@@ -79,6 +79,25 @@
   verifier que l'app affiche l'etat correct (en cours ou termine) sans avoir
   tout perdu.
 
+## 5. Etat par etape et bandeau en trois lignes
+
+- [x] 5.1 Stocker l'etat par etape dans `refresh_etat` (colonne `etapes` JSON,
+  `ALTER TABLE` explicite dans `init_db()`), initialise par `demarrer_refresh`
+  selon le kind (etapes hors cycle = `hors`), avec `db.maj_etape_refresh` qui
+  remplace `maj_progression_refresh` (meme role de heartbeat pour la
+  requalification) et `etat_refresh` qui renvoie `etapes` en dict. Verifier dans
+  `tests/test_etat_refresh.py` : etapes initiales par kind, mise a jour d'une
+  etape, requalification toujours effective.
+- [x] 5.2 Dans `update.py`, renseigner les etapes : donnees (compteur par
+  instrument puis cours obtenus), news (fetch puis classement, compteur
+  d'instruments sans erreur), synthese (en cours puis ok/echec). Verifier dans
+  `tests/test_refresh_resilient.py` : compteurs pendant la phase, etat final
+  `ok`/`partiel`/`echec`, kind `donnees` laissant news et synthese `hors`.
+- [x] 5.3 Dans `app.py`, rendre le bandeau en trois lignes fixes (Donnees, News,
+  Synthese) avec les etats de D6, sans texte explicatif, et le meme rendu pour
+  en cours / termine / interrompu. Verifier dans le navigateur (desktop et
+  375 px) : les trois etats du bandeau et un cycle `donnees` seul.
+
 ## Workflow follow-up
 
 - Archiver le changement une fois les taches ci-dessus completees et

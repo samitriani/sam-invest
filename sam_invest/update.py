@@ -30,6 +30,13 @@ from .logs import log
 ProgressFn = Callable[[float, str], None]  # (fraction 0..1, message)
 
 
+def _etat_final(fait: int, total: int) -> str:
+    """'ok' si tout est passe, 'echec' si rien, 'partiel' sinon."""
+    if fait >= total:
+        return "ok"
+    return "echec" if fait <= 0 else "partiel"
+
+
 def _noop(_f: float, _m: str) -> None:
     pass
 
@@ -138,14 +145,15 @@ def update_donnees(config: AppConfig, progress: ProgressFn | None = None) -> dic
     details: list[str] = []
     tot = {"prix": 0, "fond": 0, "evt": 0, "avis": 0, "prof": 0, "action": 0}
 
+    # Sans effet hors d'un cycle suivi ('en_cours') : l'etat n'est ecrit que par un
+    # lancement en arriere-plan (voir lancer_refresh_arriere_plan).
+    db.maj_etape_refresh("donnees", "en_cours", 0, n)
     for i, p in enumerate(instruments):
         cnt, det = _maj_donnees_instrument(p, s, progress, base=i / n, span=1 / n)
         for k in tot:
             tot[k] += cnt[k]
         details += det
-        # Sans effet hors d'un cycle suivi ('en_cours') : l'etat n'est ecrit que
-        # par un lancement en arriere-plan (voir lancer_refresh_arriere_plan).
-        db.maj_progression_refresh(f"Donnees {i + 1}/{n}")
+        db.maj_etape_refresh("donnees", "en_cours", i + 1, n)
 
     progress(1.0, "Termine.")
     asof = _now()
@@ -153,6 +161,9 @@ def update_donnees(config: AppConfig, progress: ProgressFn | None = None) -> dic
               f"evenements {tot['evt']}/{tot['action']}, avis analystes {tot['avis']}/{tot['action']}, "
               f"profils {tot['prof']}/{n}.")
     db.log_update(asof, "donnees", "ok", resume)
+    # Compteur final = instruments dont le COURS a ete obtenu (les fondamentaux
+    # absents d'un ETF ne sont pas un manque).
+    db.maj_etape_refresh("donnees", _etat_final(tot["prix"], n), tot["prix"], n)
     _historiser_flags(config, asof)
     return {"status": "ok", "kind": "donnees", "asof": asof, "resume": resume, "details": details}
 
@@ -236,6 +247,10 @@ def update_news(config: AppConfig, progress: ProgressFn | None = None) -> dict:
     # ---- Progression thread-safe : phase fetch = 0..0.5, phase classement = 0.5..1
     lock = threading.Lock()
     counters = {"fetch": 0, "classe": 0}
+    # Instruments en echec (fetch, ecriture ou classement) : le compteur final de
+    # l'etape News est n - len(ko). Un ticker sans actualite recente n'en fait PAS
+    # partie, sinon le moindre ETF peu couvert afficherait un manque permanent.
+    ko: set[str] = set()
 
     def _tick(phase: str, total: int, label: str) -> None:
         with lock:
@@ -246,13 +261,15 @@ def update_news(config: AppConfig, progress: ProgressFn | None = None) -> dict:
         else:
             frac = done / total
         prefix = "Classement" if phase == "classe" else "News"
-        db.maj_progression_refresh(f"{prefix} {done}/{total}")
+        db.maj_etape_refresh("news", "en_cours", done, total,
+                             phase="classement" if phase == "classe" else "fetch")
         progress(min(frac, 1.0), f"{prefix} {done}/{total} — {label}")
 
     # ======================================================================
     # PHASE 1 : recuperation des news, en parallele
     # ======================================================================
     progress(0.0, "Recuperation des news...")
+    db.maj_etape_refresh("news", "en_cours", 0, n, phase="fetch")
     fetched: dict[str, list[dict]] = {}
     errors: dict[str, str] = {}
 
@@ -272,6 +289,7 @@ def update_news(config: AppConfig, progress: ProgressFn | None = None) -> dict:
             except Exception as e:
                 fetched[t] = []
                 errors[t] = str(e)
+                ko.add(t)
                 details.append(f"{t} : erreur news ({e}).")
                 _tick("fetch", n, f"{t} : erreur")
                 continue
@@ -279,6 +297,7 @@ def update_news(config: AppConfig, progress: ProgressFn | None = None) -> dict:
             try:
                 db.replace_news(t, items)
             except Exception as e:
+                ko.add(t)
                 details.append(f"{t} : erreur enregistrement news ({e}).")
                 _tick("fetch", n, f"{t} : erreur")
                 continue
@@ -332,7 +351,10 @@ def update_news(config: AppConfig, progress: ProgressFn | None = None) -> dict:
                                 t, _now(), json.dumps(merged, ensure_ascii=False), s.model_haiku,
                             )
                             ok_analyse += 1
+                        else:
+                            ko.add(t)  # Haiku n'a rien rendu pour des news pourtant recuperees
                     except Exception as e:
+                        ko.add(t)
                         details.append(f"{t} : erreur classement ({e}).")
                     _tick("classe", m, t)
 
@@ -343,6 +365,7 @@ def update_news(config: AppConfig, progress: ProgressFn | None = None) -> dict:
     else:
         resume = f"News OK {ok_news}/{n} (classement Claude desactive : pas de cle)."
     db.log_update(asof, "news", "ok", resume)
+    db.maj_etape_refresh("news", _etat_final(n - len(ko), n), n - len(ko), n)
     return {"status": "ok", "kind": "news", "asof": asof, "resume": resume, "details": details}
 
 
@@ -427,6 +450,7 @@ def generer_synthese(config: AppConfig, progress: Callable[..., None] | None = N
 def _synthese_du_cycle(config: AppConfig) -> str:
     """Etape synthese d'un cycle 'global_analyse'. Renvoie le fragment de resume."""
     if not config.secrets.anthropic_api_key:
+        db.maj_etape_refresh("synthese", "echec")
         return "Synthese manquante (cle Claude absente)."
     tickers = [i.ticker for i in config.watchlist]
     total = max(len(tickers), 1)
@@ -436,16 +460,19 @@ def _synthese_du_cycle(config: AppConfig) -> str:
         done = min(sum(1 for tk in tickers if f'"{tk}"' in texte), total)
         if done != vu["n"]:
             vu["n"] = done
-            db.maj_progression_refresh(f"Synthese {done}/{total}")
+            db.maj_etape_refresh("synthese", "en_cours", done, total)
 
-    db.maj_progression_refresh("Synthese...")
+    db.maj_etape_refresh("synthese", "en_cours")
     try:
         cr = generer_synthese(config, _prog)
     except Exception as e:
         log(f"[refresh] synthese en echec : {e}", "error")
+        db.maj_etape_refresh("synthese", "echec")
         return f"Synthese manquante ({e})."
     if cr["status"] in ("ok", "info"):
+        db.maj_etape_refresh("synthese", "ok")
         return "Synthese OK."
+    db.maj_etape_refresh("synthese", "echec")
     return "Synthese manquante (Claude n'a pas repondu)."
 
 

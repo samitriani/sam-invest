@@ -12,7 +12,8 @@ Verifie que :
   - le rafraichissement part dans un thread et rend la main tout de suite ;
   - les news (puis leur classement) sont en base ticker par ticker, PENDANT la
     phase, pas seulement a la fin ;
-  - l'etat est 'en_cours' avec une progression pendant le travail, 'termine'
+  - l'etat est 'en_cours' avec le detail par etape (donnees / news / synthese,
+    compteurs, etapes hors cycle) pendant le travail, 'termine'
     a la fin ;
   - un 2e lancement pendant un cycle vivant est refuse ;
   - une coupure brutale en pleine phase laisse l'etat 'interrompu', garde ce
@@ -106,8 +107,10 @@ def _run() -> None:
 
             e = db.etat_refresh()
             assert e["statut"] == "en_cours" and e["kind"] == "news"
-            assert _attendre(lambda: db.etat_refresh()["progression"] == "News 2/4"), \
-                f"progression attendue 'News 2/4', lue {db.etat_refresh()['progression']!r}"
+            assert _attendre(lambda: db.etat_refresh()["etapes"]["news"].get("fait") == 2),                 f"news attendues a 2/4, lu {db.etat_refresh()['etapes']['news']!r}"
+            e = db.etat_refresh()
+            assert e["etapes"]["news"] == {"etat": "en_cours", "fait": 2, "total": 4, "phase": "fetch"}
+            assert e["etapes"]["donnees"] == {"etat": "hors"} and e["etapes"]["synthese"] == {"etat": "hors"}
 
             # Verrou : un 2e lancement pendant le cycle vivant est refuse.
             assert update.lancer_refresh_arriere_plan(cfg, "news") is None
@@ -117,6 +120,7 @@ def _run() -> None:
             assert not th.is_alive()
             e = db.etat_refresh()
             assert e["statut"] == "termine", e
+            assert e["etapes"]["news"] == {"etat": "ok", "fait": 4, "total": 4}, e["etapes"]
             assert all(len(db.get_news(t)) == 1 for t in tickers)
 
             # ==============================================================
@@ -163,6 +167,9 @@ def _run() -> None:
             assert not th.is_alive()
             e = db.etat_refresh()
             assert e["statut"] == "interrompu", e
+            # L'etape en cours a la coupure reste 'en_cours' : c'est le rendu qui la
+            # presente comme coupee, aucune ecriture n'a lieu apres.
+            assert e["etapes"]["news"]["etat"] == "en_cours", e["etapes"]
             for t in ("AAA", "BBB", "CCC"):
                 assert len(db.get_news(t)) == 1, f"{t} : acquis perdu apres la coupure"
             assert db.get_news("DDD") == []
@@ -188,18 +195,31 @@ def _run() -> None:
                 return {"global": "Vue d'ensemble", "instruments": {"AAA": {"reco": "garder"}}}
 
             update.llm.synthese_et_reco = sonnet_ok
+
+            def quote(t, *a, **k):
+                return {"quote": {"ticker": t, "asof": "2026-08-09T10:00:00+00:00",
+                                  "last_price": 1.0, "prev_close": 1.0, "change_pct": 0.0,
+                                  "high_52w": 2.0, "low_52w": 0.5, "drawdown_pct": 0.0,
+                                  "source": "test"},
+                        "history": [("2026-01-01", 1.0)]}
+
+            update.ds.fetch_prices = quote
             cfg = _config(tickers, cle_claude="cle-test")
             update.llm.classer_news = classer     # classement Haiku non bloquant (DDD libre)
             attente_d.set()
             th = update.lancer_refresh_arriere_plan(cfg, "global_analyse")
             assert th is not None
-            assert _attendre(lambda: db.etat_refresh()["progression"] == "Synthese 1/4"), \
-                f"progression synthese attendue, lue {db.etat_refresh()['progression']!r}"
-            assert db.etat_refresh()["statut"] == "en_cours"
+            assert _attendre(lambda: db.etat_refresh()["etapes"]["synthese"].get("fait") == 1),                 f"synthese attendue en cours, lu {db.etat_refresh()['etapes']['synthese']!r}"
+            e = db.etat_refresh()
+            assert e["statut"] == "en_cours"
+            assert e["etapes"]["donnees"] == {"etat": "ok", "fait": 4, "total": 4}, e["etapes"]
+            assert e["etapes"]["news"] == {"etat": "ok", "fait": 4, "total": 4}, e["etapes"]
+            assert e["etapes"]["synthese"]["etat"] == "en_cours"
             fige.set()
             th.join(15)
             e = db.etat_refresh()
             assert e["statut"] == "termine" and "Synthese OK" in e["resume"], e
+            assert e["etapes"]["synthese"] == {"etat": "ok"}, e["etapes"]
             cache = db.get_briefing_cache()
             assert cache and cache["global"] == "Vue d'ensemble"
 
@@ -213,7 +233,31 @@ def _run() -> None:
             th.join(15)
             e = db.etat_refresh()
             assert e["statut"] == "termine" and "Synthese manquante" in e["resume"], e
+            assert e["etapes"]["synthese"] == {"etat": "echec"}, e["etapes"]
             assert all(len(db.get_news(t)) == 1 for t in tickers), "les donnees doivent rester"
+
+            # ==============================================================
+            # E. Compteurs finaux : un cours manquant = 'partiel' ; un kind
+            #    'donnees' laisse news et synthese hors cycle
+            # ==============================================================
+            update.ds.fetch_prices = lambda t, *a, **k: None if t == "CCC" else quote(t)
+            th = update.lancer_refresh_arriere_plan(cfg, "donnees")
+            assert th is not None
+            th.join(15)
+            e = db.etat_refresh()
+            assert e["etapes"]["donnees"] == {"etat": "partiel", "fait": 3, "total": 4}, e["etapes"]
+            assert e["etapes"]["news"] == {"etat": "hors"} and e["etapes"]["synthese"] == {"etat": "hors"}
+
+            update.ds.fetch_prices = lambda *a, **k: None
+            th = update.lancer_refresh_arriere_plan(cfg, "donnees")
+            th.join(15)
+            assert db.etat_refresh()["etapes"]["donnees"] == {"etat": "echec", "fait": 0, "total": 4}
+
+            # Un ticker sans actualite recente n'est PAS un manque pour l'etape News.
+            update.ds.fetch_news = lambda t, *a, **k: [] if t == "BBB" else _news(t)
+            th = update.lancer_refresh_arriere_plan(_config(tickers), "news")
+            th.join(15)
+            assert db.etat_refresh()["etapes"]["news"] == {"etat": "ok", "fait": 4, "total": 4}
     finally:
         for k, f in sauve["ds"].items():
             setattr(update.ds, k, f)

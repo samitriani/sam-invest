@@ -77,9 +77,8 @@ lancer deux threads ecrivains concurrents.
 
 Un enregistrement mutable par cycle de rafraichissement (etendant
 `update_log` ou une table dediee) : `statut` (`en_cours` | `interrompu` |
-`termine`), `type` (donnees/news/global/global_analyse), horodatage de debut, et une
-progression textuelle courte (ex. "News 12/20"). Ecrit par le thread de
-travail a chaque etape ; lu par n'importe quelle session au rendu de page.
+`termine`), `type` (donnees/news/global/global_analyse), horodatage de debut, et l'etat de
+chaque etape (voir D6). Ecrit par le thread de travail a chaque etape ; lu par n'importe quelle session au rendu de page.
 
 **Alternative ecartee — reutiliser `diagnostic_cache` tel quel** : son grain
 est "un statut par ticker", adapte a la persistance par instrument (voir D4)
@@ -116,12 +115,26 @@ La page « Ma synthese » ne relit `briefing_cache` que si sa session est vide :
 apres un cycle `global_analyse`, une session qui affichait une ancienne
 synthese doit la remplacer par celle du cache plus recente.
 
-### D6. Etat affiche minimal, vocabulaire existant
+### D6. Etat par etape, trois lignes fixes
 
-L'UI affiche "Rafraichissement en cours (X/Y)" ou "Dernier rafraichissement
-interrompu le <date> (<ce qui a ete obtenu>)" en reprenant le style caption +
-barre de progression deja en place (`run_update`, `afficher_compte_rendu`).
-Aucun nouveau bouton ni reorganisation de menu.
+L'etat du cycle porte un JSON par etape (`donnees`, `news`, `synthese`) :
+`etat` (`hors` | `attente` | `en_cours` | `ok` | `partiel` | `echec`), `fait`,
+`total`, et pour les news `phase` (`fetch` | `classement`). Le kind du cycle fixe
+quelles etapes sont `hors` (cours seuls : news et synthese `hors`). Ce stockage
+remplace la chaine de progression unique : une chaine ne peut pas dire qu'une
+etape est finie pendant qu'une autre tourne.
+
+Un compteur final compte les instruments **sans erreur** (cours obtenus ; news
+recuperees, ecrites et classees sans echec), pas ceux qui ont des news : un ETF
+sans actualite recente n'est pas un manque, sinon `⚠️` serait permanent. `ok` si
+tous, `partiel` si certains, `echec` si aucun. Une etape `en_cours` ou `attente`
+d'un cycle `interrompu` s'affiche coupee / non lancee, deduit au rendu sans
+ecriture supplementaire.
+
+L'UI affiche toujours les trois lignes (`—` pour `hors`), sans phrase
+explicative, dans un encadre info / succes / avertissement selon l'etat. Aucun
+nouveau bouton ni reorganisation de menu. Le resume en phrase et les details par
+instrument restent disponibles (resume dans `update_log`, details en expander).
 
 ## Risks / Trade-offs
 

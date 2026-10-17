@@ -37,9 +37,13 @@ pourquoi.
   seule, sur l'existant) garde son appel direct.
 - Un second rafraichissement ne peut pas se lancer tant qu'un premier est en
   cours (aucun garde-fou aujourd'hui).
-- Affichage minimal, repris du style existant (caption + barre de progression) :
-  "rafraichissement en cours" / "interrompu, relance si besoin" / horodatage de
-  fin. Aucune refonte des menus, boutons ou pages n'est dans le perimetre de ce
+- L'etat est presente en trois lignes toujours visibles, une par etape (donnees,
+  news, synthese IA), avec le statut de chaque etape et un compteur
+  d'instruments, sans phrase explicative ; une etape hors du cycle lance
+  affiche « — ». L'etat est donc stocke etape par etape, et non plus comme une
+  seule chaine de progression.
+- Affichage minimal, repris du style existant (encadre colore + compteurs) :
+  en cours, interrompu, horodatage de fin. Aucune refonte des menus, boutons ou pages n'est dans le perimetre de ce
   changement (volet mis en standby, voir conversation) ; seul le texte
   strictement necessaire pour rendre l'etat resilient visible est ajuste.
 

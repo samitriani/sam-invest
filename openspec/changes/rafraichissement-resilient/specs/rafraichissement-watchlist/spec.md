@@ -87,6 +87,31 @@ cette session d'origine soit encore ouverte.
 - **THEN** l'application indique que ce rafraichissement est incomplet, avec
   l'horodatage et l'etendue de ce qui a ete obtenu avant l'interruption
 
+### Requirement: Etat par etape du rafraichissement
+L'etat consultable d'un rafraichissement SHALL detailler trois etapes — donnees,
+news, synthese — chacune avec son statut (en attente, en cours, terminee,
+terminee avec un manque, en echec, hors cycle) et, pour donnees et news, un
+compteur d'instruments. Il SHALL etre presente sur trois lignes, une par
+etape, sans texte explicatif.
+
+#### Scenario: Cycle avec analyse en cours
+- **WHEN** un rafraichissement avec analyse est en cours, donnees terminees
+- **THEN** donnees apparait terminee avec son compteur, news en cours avec son
+  compteur, et synthese en attente
+
+#### Scenario: Etape hors du cycle lance
+- **WHEN** seul un rafraichissement des donnees est lance
+- **THEN** news et synthese restent affichees, signalees hors cycle
+
+#### Scenario: Etape terminee avec un manque
+- **WHEN** les cours de 21 des 23 instruments ont ete recuperes
+- **THEN** donnees apparait terminee avec un manque, compteur 21/23
+
+#### Scenario: Interruption pendant les news
+- **WHEN** un rafraichissement est interrompu pendant la phase news
+- **THEN** donnees apparait terminee, news interrompue avec le compteur atteint,
+  et synthese non lancee
+
 ### Requirement: Rafraichissement exclusif
 Le systeme SHALL empecher le lancement d'un nouveau rafraichissement tant
 qu'un rafraichissement est deja en cours d'execution.
