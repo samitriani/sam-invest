@@ -70,11 +70,11 @@
   verifiant (a) les tickers deja traites restent en base, (b) l'etat passe a
   `interrompu`, (c) un nouveau lancement est accepte une fois `interrompu`.
   Verifier par `python -m tests.test_refresh_resilient`.
-- [ ] 4.2 Executer les quatre scripts de non-regression existants
+- [x] 4.2 Executer les quatre scripts de non-regression existants
   (`test_debt_to_equity`, `test_classement_bourses`, `test_societe_financiere`,
   `test_masquage_alertes`) et confirmer qu'ils passent toujours sans
   modification.
-- [ ] 4.3 Test manuel mobile : declencher « Mettre a jour donnees et analyse »
+- [x] 4.3 Test manuel mobile : declencher « Mettre a jour donnees et analyse »
   sur telephone, passer sur une autre appli pendant 2-3 minutes, revenir, et
   verifier que l'app affiche l'etat correct (en cours ou termine) sans avoir
   tout perdu.
@@ -97,6 +97,15 @@
   Synthese) avec les etats de D6, sans texte explicatif, et le meme rendu pour
   en cours / termine / interrompu. Verifier dans le navigateur (desktop et
   375 px) : les trois etats du bandeau et un cycle `donnees` seul.
+
+## Notes de cloture
+
+- 4.2 : les trois scripts purs passent ; `test_masquage_alertes` passe toutes ses
+  verifications mais plante au nettoyage de son dossier temporaire sous Windows
+  (comportement anterieur a ce changement, non corrige ici).
+- 4.3 : valide par l'utilisateur sur l'app deployee apres redemarrage (bandeau et
+  cycle OK) ; le scenario « changer d'appli pendant le cycle » n'a pas ete
+  confirme explicitement.
 
 ## Workflow follow-up
 

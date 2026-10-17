@@ -397,6 +397,11 @@ meme format** qui reproduit le cas d'origine, avec le contexte en docstring.
    survit pas — d'ou le bouton « ⬇️ Telecharger config.yaml » de la page Ma liste.
 9. **Le log** est un fichier (`data/sam_invest.log`), pas la sortie standard :
    c'est la qu'il faut chercher pourquoi une synthese n'apparait pas.
+10. **Apres un push qui modifie `sam_invest/`, redemarrer l'app Cloud** (Manage app
+   > Reboot app). `app.py` est relu a chaque execution, mais les modules importes
+   restent en memoire dans leur ancienne version : on obtient un melange (vu :
+   bandeau de refresh tout en « — » parce que l'ancienne `db.py` ne renvoie pas
+   `etapes`). Le reboot peut vider la base (voir #8).
 
 ---
 
