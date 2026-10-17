@@ -1,0 +1,148 @@
+# Design
+
+## Context
+
+Aujourd'hui, `run_update()` (app.py) appelle `update_donnees`/`update_news`/
+`update_global` (sam_invest/update.py) de facon synchrone, dans le script
+Streamlit declenche par le clic. Les prix sont deja ecrits instrument par
+instrument (`_maj_donnees_instrument`), mais les news et leur classement Haiku
+ne sont ecrits qu'une fois toute la phase terminee (boucles apres les
+`ThreadPoolExecutor` dans `update_news`). Un precedent proche existe pour le
+diagnostic Opus (`_lancer_analyse` + `diagnostic_cache`, statut
+partiel/complet) : chaque etape est ecrite en base au fur et a mesure, pour
+qu'une interruption laisse un resultat partiel consultable. Mais ce precedent
+reste execute DANS le script Streamlit du clic : si le serveur annule cette
+execution (session jugee deconnectee), le travail s'arrete reellement — seule
+une trace de ce qui etait fait subsiste, rien ne continue. Voir
+`proposal.md - Why` pour le constat cote utilisateur (coupure mobile en cours
+de rafraichissement, reussite ~1 fois sur 2).
+
+Contrainte a preserver (CLAUDE.md §8) : toutes les ecritures SQLite restent
+dans un seul thread a la fois (le fetch reseau/LLM peut etre parallelise, pas
+les ecritures).
+
+## Goals / Non-Goals
+
+**Goals:**
+- Le rafraichissement continue de s'executer et d'ecrire ses resultats meme si
+  la connexion qui l'a declenche se coupe.
+- Les news/classements sont persistes par ticker, au meme niveau de granularite
+  que les prix.
+- L'etat du dernier rafraichissement (en cours / interrompu / termine) est
+  lisible en base par n'importe quelle session.
+- Un seul rafraichissement s'execute a la fois.
+
+**Non-Goals:**
+- Pas de refonte des menus, boutons ou pages (volet UI explicitement en
+  standby — voir proposal.md - Impact). Seul le texte d'etat minimal change.
+- Pas de changement a la chaine de repli des sources (yfinance -> Finnhub ->
+  FMP) ni aux donnees recuperees.
+- Pas de file de taches externe, de cron, ni de notification push : outil
+  mono-utilisateur, mono-processus (CLAUDE.md §1).
+- Pas de coordination multi-appareils temps reel (push) : lecture au prochain
+  rendu de page, pas un flux live.
+
+## Decisions
+
+### D1. Thread serveur detache, independant de la session Streamlit
+
+Le clic lance le travail dans un `threading.Thread` demarre par le process
+Streamlit, et non plus comme un appel bloquant dans le script de la session.
+Streamlit Community Cloud fait tourner un seul process Python partage par
+toutes les sessions d'une meme app ; un thread demarre dans ce process survit
+a la deconnexion de la session qui l'a lance, tant que le process reste vivant.
+
+**Alternative ecartee — ameliorer seulement la persistance (reprendre le
+pattern diagnostic tel quel)** : resout la perte de donnees mais pas l'echec
+percu par l'utilisateur. Il faudrait toujours tout relancer a chaque coupure,
+ce qui est le probleme signale, pas seulement sa consequence.
+
+**Alternative ecartee — file de taches externe (Celery/RQ/cron)** : ajoute une
+dependance et un process a operer, disproportionne pour 20 instruments dans un
+outil mono-utilisateur assume comme tel.
+
+### D2. Rafraichissement exclusif (verrou en base)
+
+Un enregistrement d'etat en base (pas seulement en memoire) refuse un nouveau
+lancement tant que le precedent n'est pas `termine` ou `interrompu`. En base
+(pas seulement en memoire) pour survivre a un redemarrage du process (ex.
+redeploiement Streamlit Cloud) sans etat fantome indetectable : voir le risque
+dedie ci-dessous pour la requalification automatique.
+
+Necessaire aussi pour proteger l'invariant "un seul thread ecrit a la fois" :
+le process etant partage, deux clics (ou deux appareils) pourraient sinon
+lancer deux threads ecrivains concurrents.
+
+### D3. Table de suivi d'etat du cycle
+
+Un enregistrement mutable par cycle de rafraichissement (etendant
+`update_log` ou une table dediee) : `statut` (`en_cours` | `interrompu` |
+`termine`), `type` (donnees/news/global), horodatage de debut, et une
+progression textuelle courte (ex. "News 12/20"). Ecrit par le thread de
+travail a chaque etape ; lu par n'importe quelle session au rendu de page.
+
+**Alternative ecartee — reutiliser `diagnostic_cache` tel quel** : son grain
+est "un statut par ticker", adapte a la persistance par instrument (voir D4)
+mais pas a representer l'etat d'ENSEMBLE du cycle (une seule ligne lisible
+d'un coup d'œil, independante du nombre d'instruments).
+
+### D4. Persistance des news par ticker, pas par phase
+
+Dans `update_news`, ecrire `db.replace_news` et `db.upsert_news_analysis` pour
+chaque ticker des qu'il est pret (resultat du fetch puis du classement),
+au lieu d'attendre la fin de la boucle `as_completed` sur l'ensemble de la
+watchlist — au meme niveau de granularite que les prix
+(`_maj_donnees_instrument`). L'invariant "un seul thread ecrit" est preserve :
+c'est toujours le meme thread de travail qui ecrit, seul le moment de chaque
+ecriture avance (par ticker plutot qu'en bloc final).
+
+### D5. Etat affiche minimal, vocabulaire existant
+
+L'UI affiche "Rafraichissement en cours (X/Y)" ou "Dernier rafraichissement
+interrompu le <date> (<ce qui a ete obtenu>)" en reprenant le style caption +
+barre de progression deja en place (`run_update`, `afficher_compte_rendu`).
+Aucun nouveau bouton ni reorganisation de menu.
+
+## Risks / Trade-offs
+
+- **[Risque]** Le process redemarre (veille Streamlit Cloud, redeploiement)
+  pendant un refresh : le thread meurt avec le process, l'etat reste
+  `en_cours` indefiniment (etat fantome). **Mitigation** : si l'etat lu est
+  `en_cours` sans progression depuis une duree bien superieure a la duree
+  normale (3-4 min), le requalifier automatiquement en `interrompu` a la
+  lecture.
+- **[Risque]** Deux sessions ouvertes simultanement peuvent lire un etat
+  legerement perime (pas de push temps reel). **Mitigation** : acceptable
+  pour un outil mono-utilisateur ; l'etat se rafraichit au prochain rendu de
+  page.
+- **[Risque]** Le thread capture la configuration (watchlist) au moment du
+  clic ; une modification de la watchlist pendant un refresh en cours ne sera
+  prise en compte qu'au prochain cycle. **Mitigation** : consequence directe
+  du verrou d'exclusion (D2) — il suffit d'attendre la fin ou l'interruption
+  pour relancer sur la liste a jour.
+- **[Risque]** Un `threading.Thread` tue brutalement (arret du process) peut
+  interrompre une ecriture en cours. **Mitigation** : chaque ecriture
+  (par ticker) est une transaction SQLite independante (`with get_conn() as
+  conn`, deja le cas dans db.py) ; au pire, seule l'ecriture en cours au
+  moment de la coupure est perdue, jamais les precedentes.
+
+## Migration Plan
+
+- Changement additif en base (nouvelle table ou nouvelles colonnes) : suivre
+  le pitfall #2 de CLAUDE.md (`ALTER TABLE` explicite dans `init_db()`, le
+  `CREATE TABLE IF NOT EXISTS` ne modifie pas une table existante).
+- Deploiement : un commit/push vers `main` (Streamlit Cloud suit `main`), pas
+  d'etape manuelle.
+- Rollback : revert du commit. L'ajout etant additif, l'ancien code ignore
+  simplement la nouvelle table/colonnes s'il faut revenir en arriere.
+
+## Open Questions
+
+- Faut-il persister le classement Haiku par sous-lots (ex. tous les 5
+  tickers) plutot qu'au fil de chaque `as_completed` individuel, pour encore
+  reduire la fenetre de perte ? N'affecte pas les specs (le comportement
+  observable — persistance par ticker — reste le meme) ; tranchable a
+  l'implementation.
+- Duree exacte avant de requalifier `en_cours` en `interrompu` (propose : 10
+  min, largement au-dessus des 3-4 min attendus) : ajustable sans impact sur
+  les specs.
