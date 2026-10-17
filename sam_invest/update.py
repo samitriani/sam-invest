@@ -25,6 +25,7 @@ from typing import Callable
 from . import data_sources as ds
 from . import db, llm
 from .config import AppConfig
+from .logs import log
 
 ProgressFn = Callable[[float, str], None]  # (fraction 0..1, message)
 
@@ -142,6 +143,9 @@ def update_donnees(config: AppConfig, progress: ProgressFn | None = None) -> dic
         for k in tot:
             tot[k] += cnt[k]
         details += det
+        # Sans effet hors d'un cycle suivi ('en_cours') : l'etat n'est ecrit que
+        # par un lancement en arriere-plan (voir lancer_refresh_arriere_plan).
+        db.maj_progression_refresh(f"Donnees {i + 1}/{n}")
 
     progress(1.0, "Termine.")
     asof = _now()
@@ -242,6 +246,7 @@ def update_news(config: AppConfig, progress: ProgressFn | None = None) -> dict:
         else:
             frac = done / total
         prefix = "Classement" if phase == "classe" else "News"
+        db.maj_progression_refresh(f"{prefix} {done}/{total}")
         progress(min(frac, 1.0), f"{prefix} {done}/{total} — {label}")
 
     # ======================================================================
@@ -254,36 +259,35 @@ def update_news(config: AppConfig, progress: ProgressFn | None = None) -> dict:
     def _fetch(ticker: str) -> tuple[str, list[dict]]:
         return ticker, ds.fetch_news(ticker, max_items, days, s.finnhub_api_key, s.fmp_api_key)
 
+    # Ecriture DB ticker par ticker, des qu'un fetch aboutit (et non en bloc apres
+    # tous les fetchs) : si le rafraichissement est interrompu, les news deja
+    # recuperees restent en base. Les workers ne font que du reseau ; seul ce
+    # thread (celui qui a appele update_news) ecrit, d'ou une seule ecriture a la fois.
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futs = {ex.submit(_fetch, p.ticker): p.ticker for p in instruments}
         for fut in as_completed(futs):
             t = futs[fut]
             try:
                 _, items = fut.result()
-                fetched[t] = items
-                _tick("fetch", n, f"{t} : {len(items)} trouvees")
             except Exception as e:
                 fetched[t] = []
                 errors[t] = str(e)
+                details.append(f"{t} : erreur news ({e}).")
                 _tick("fetch", n, f"{t} : erreur")
-
-    # ---- Ecritures DB des news (thread principal uniquement) ----
-    for p in instruments:
-        t = p.ticker
-        items = fetched.get(t, [])
-        if t in errors:
-            details.append(f"{t} : erreur news ({errors[t]}).")
-            continue
-        try:
-            db.replace_news(t, items)
-        except Exception as e:
-            details.append(f"{t} : erreur enregistrement news ({e}).")
-            continue
-        if items:
-            ok_news += 1
-            details.append(f"{t} : {len(items)} news ({items[0].get('source')}).")
-        else:
-            details.append(f"{t} : aucune news recente.")
+                continue
+            fetched[t] = items
+            try:
+                db.replace_news(t, items)
+            except Exception as e:
+                details.append(f"{t} : erreur enregistrement news ({e}).")
+                _tick("fetch", n, f"{t} : erreur")
+                continue
+            if items:
+                ok_news += 1
+                details.append(f"{t} : {len(items)} news ({items[0].get('source')}).")
+            else:
+                details.append(f"{t} : aucune news recente.")
+            _tick("fetch", n, f"{t} : {len(items)} trouvees")
 
     # ======================================================================
     # PHASE 2 : classement Claude Haiku, en parallele
@@ -314,7 +318,6 @@ def update_news(config: AppConfig, progress: ProgressFn | None = None) -> dict:
             return ticker, merged
 
         m = len(targets)
-        results: dict[str, list[dict]] = {}
         if m:
             with ThreadPoolExecutor(max_workers=workers) as ex:
                 futs = {ex.submit(_classify, t): t for t in targets}
@@ -322,18 +325,16 @@ def update_news(config: AppConfig, progress: ProgressFn | None = None) -> dict:
                     t = futs[fut]
                     try:
                         _, merged = fut.result()
-                        results[t] = merged
+                        # Ecriture immediate : un classement Haiku deja paye ne doit
+                        # pas attendre la fin des autres tickers pour etre sauve.
+                        if merged:
+                            db.upsert_news_analysis(
+                                t, _now(), json.dumps(merged, ensure_ascii=False), s.model_haiku,
+                            )
+                            ok_analyse += 1
                     except Exception as e:
                         details.append(f"{t} : erreur classement ({e}).")
                     _tick("classe", m, t)
-
-            # ---- Ecritures DB des analyses (thread principal uniquement) ----
-            for t, merged in results.items():
-                if merged:
-                    db.upsert_news_analysis(
-                        t, _now(), json.dumps(merged, ensure_ascii=False), s.model_haiku,
-                    )
-                    ok_analyse += 1
 
     progress(1.0, "Termine.")
     asof = _now()
@@ -364,3 +365,134 @@ def update_global(config: AppConfig, progress: ProgressFn | None = None) -> dict
     db.log_update(asof, "global", "ok", resume)
     return {"status": "ok", "kind": "global", "asof": asof, "resume": resume,
             "details": d.get("details", []) + nws.get("details", [])}
+
+
+# ==========================================================================
+# Lancement en arriere-plan : survit a la coupure de la connexion du navigateur
+# ==========================================================================
+def generer_synthese(config: AppConfig, progress: Callable[..., None] | None = None) -> dict:
+    """UN appel Sonnet (ou reprise du cache si donnees/news inchangees), SANS Streamlit.
+
+    Extraite de l'UI pour pouvoir tourner dans le thread de rafraichissement :
+    le resultat est ecrit en base (`briefing_cache`), donc independant de la
+    session qui l'a declenchee. Ne rafraichit rien elle-meme : elle lit l'etat
+    courant de la base.
+
+    Renvoie {"status": "ok" | "info" | "erreur", "resume": str, ...} :
+      - ok     : + "global", "instruments", "synthese_asof" (texte frais, deja en base) ;
+      - info   : + "cache" (donnees/news inchangees : rien regenere, texte du cache) ;
+      - erreur : Claude n'a pas repondu (rien ecrit).
+    `progress(n_caracteres, texte)` est relaye tel quel au flux Sonnet.
+    """
+    from .briefing import construire_briefing
+
+    ad = (db.last_update("donnees") or {}).get("asof")
+    an = (db.last_update("news") or {}).get("asof")
+    dd = construire_briefing(config)
+    cache = db.get_briefing_cache()
+    if (cache is not None and cache.get("donnees_asof") == ad
+            and cache.get("news_asof") == an):
+        log("[synthese] donnees/news inchangees -> cache reutilise (pas d'appel Sonnet).")
+        return {"status": "info", "cache": cache,
+                "resume": "Donnees et news inchangees depuis la derniere synthese : "
+                          "texte recupere sans nouvel appel Claude."}
+
+    log(f"[synthese] generation (watchlist={len(config.watchlist)}, "
+        f"instruments={len(dd.get('instruments', []))})")
+    res = llm.synthese_et_reco(config.secrets, dd, progress=progress)
+    if res:
+        m = db.last_update()
+        synthese_asof = m["asof"] if m else None
+        db.save_briefing_cache(
+            generated_at=_now(), donnees_asof=ad, news_asof=an, synthese_asof=synthese_asof,
+            global_text=res.get("global") or "",
+            instruments_json=json.dumps(res.get("instruments") or {}, ensure_ascii=False),
+        )
+        log(f"[synthese] stockee: global={len(res.get('global') or '')} chars, "
+            f"instruments={len(res.get('instruments') or {})}")
+        return {"status": "ok", "global": res.get("global"),
+                "instruments": res.get("instruments", {}), "synthese_asof": synthese_asof,
+                "resume": "Synthese ecrite. Elle est enregistree : tu la retrouveras meme "
+                          "apres une coupure ou depuis un autre appareil."}
+
+    log("[synthese] resultat vide -> rien a afficher", "error")
+    return {"status": "erreur",
+            "resume": "Claude n'a pas repondu : la synthese n'a pas pu etre ecrite. "
+                      "Le plus souvent c'est le reseau qui a lache pendant la redaction "
+                      "(elle dure 2 a 3 minutes) — reessaie, les cours et actualites "
+                      "recuperes, eux, sont deja enregistres. Detail dans "
+                      "`data/sam_invest.log`."}
+
+
+def _synthese_du_cycle(config: AppConfig) -> str:
+    """Etape synthese d'un cycle 'global_analyse'. Renvoie le fragment de resume."""
+    if not config.secrets.anthropic_api_key:
+        return "Synthese manquante (cle Claude absente)."
+    tickers = [i.ticker for i in config.watchlist]
+    total = max(len(tickers), 1)
+    vu = {"n": -1}
+
+    def _prog(_n_chars: int, texte: str = "") -> None:
+        done = min(sum(1 for tk in tickers if f'"{tk}"' in texte), total)
+        if done != vu["n"]:
+            vu["n"] = done
+            db.maj_progression_refresh(f"Synthese {done}/{total}")
+
+    db.maj_progression_refresh("Synthese...")
+    try:
+        cr = generer_synthese(config, _prog)
+    except Exception as e:
+        log(f"[refresh] synthese en echec : {e}", "error")
+        return f"Synthese manquante ({e})."
+    if cr["status"] in ("ok", "info"):
+        return "Synthese OK."
+    return "Synthese manquante (Claude n'a pas repondu)."
+
+
+def lancer_refresh_arriere_plan(config: AppConfig, kind: str = "global") -> threading.Thread | None:
+    """Lance un rafraichissement dans un thread serveur, sans l'attendre.
+
+    Pourquoi : appele dans le script Streamlit du clic, un rafraichissement de
+    3-4 min est lie a la connexion du navigateur ; sur mobile (appli mise en
+    arriere-plan, wifi -> 4G) cette connexion tombe et le travail est perdu.
+    Le thread vit dans le process serveur, partage par toutes les sessions : il
+    continue et ecrit en base quoi qu'il arrive au navigateur. L'etat du cycle
+    (en_cours / interrompu / termine) est en base, donc lisible depuis n'importe
+    quelle session.
+
+    Ce thread devient l'UNIQUE ecrivain SQLite pendant le cycle ; le verrou
+    `db.demarrer_refresh` empeche un 2e cycle de lui faire concurrence.
+
+    Renvoie le thread demarre, ou None si un cycle vivant existe deja (aucun
+    nouveau travail n'est lance).
+    """
+    travaux = {"donnees": update_donnees, "news": update_news, "global": update_global,
+               "global_analyse": update_global}
+    if kind not in travaux:
+        raise ValueError(f"kind inconnu : {kind!r}")
+    db.init_db()
+    if not db.demarrer_refresh(kind):
+        return None
+
+    def _travail() -> None:
+        statut, resume, details = "interrompu", "Interrompu avant la fin.", None
+        try:
+            cr = travaux[kind](config)
+            statut, resume = "termine", cr.get("resume", "")
+            details = json.dumps(cr.get("details", []), ensure_ascii=False)
+            if kind == "global_analyse":
+                # Les donnees sont deja en base : un echec de synthese ne rend pas
+                # le cycle 'interrompu', il est dit dans le resume.
+                resume = f"{resume} | {_synthese_du_cycle(config)}"
+        except Exception as e:  # le thread ne doit jamais mourir sans clore le cycle
+            resume = f"Interrompu : {e}"
+            log(f"[refresh] {kind} interrompu : {e}", "error")
+        finally:
+            try:
+                db.terminer_refresh(statut, resume, details=details)
+            except Exception as e:
+                log(f"[refresh] cloture du cycle impossible : {e}", "error")
+
+    th = threading.Thread(target=_travail, name=f"refresh-{kind}", daemon=True)
+    th.start()
+    return th

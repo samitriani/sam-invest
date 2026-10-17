@@ -77,7 +77,7 @@ lancer deux threads ecrivains concurrents.
 
 Un enregistrement mutable par cycle de rafraichissement (etendant
 `update_log` ou une table dediee) : `statut` (`en_cours` | `interrompu` |
-`termine`), `type` (donnees/news/global), horodatage de debut, et une
+`termine`), `type` (donnees/news/global/global_analyse), horodatage de debut, et une
 progression textuelle courte (ex. "News 12/20"). Ecrit par le thread de
 travail a chaque etape ; lu par n'importe quelle session au rendu de page.
 
@@ -96,7 +96,27 @@ watchlist — au meme niveau de granularite que les prix
 c'est toujours le meme thread de travail qui ecrit, seul le moment de chaque
 ecriture avance (par ticker plutot qu'en bloc final).
 
-### D5. Etat affiche minimal, vocabulaire existant
+### D5. Synthese Sonnet dans le meme thread (`global_analyse`)
+
+Le bouton « donnees et analyse » enchaine aujourd'hui `update_global` puis
+`ecrire_synthese` dans le script Streamlit ; un thread detache ne peut pas
+rendre la main a ce script entre les deux. La partie non-UI de
+`ecrire_synthese` (cache inchange, `construire_briefing`, appel Sonnet,
+`save_briefing_cache`) est extraite en `update.generer_synthese`, sans `st`.
+`app.ecrire_synthese` en devient un enrobage UI (barre de progression,
+`session_state`) pour « Lancer l'analyse », qui reste un appel direct. Un cycle
+`global_analyse` fait `update_global` puis `generer_synthese` ; si la synthese
+echoue, les donnees sont deja en base et le resume du cycle le dit.
+
+**Alternative ecartee — refresh seul en arriere-plan, synthese a part** :
+retire le « tout en un clic » qui est l'usage principal, et laisse les 2-3 min
+de Sonnet exposees a la meme coupure.
+
+La page « Ma synthese » ne relit `briefing_cache` que si sa session est vide :
+apres un cycle `global_analyse`, une session qui affichait une ancienne
+synthese doit la remplacer par celle du cache plus recente.
+
+### D6. Etat affiche minimal, vocabulaire existant
 
 L'UI affiche "Rafraichissement en cours (X/Y)" ou "Dernier rafraichissement
 interrompu le <date> (<ce qui a ete obtenu>)" en reprenant le style caption +

@@ -28,6 +28,13 @@ pourquoi.
   progression) est suivi en base, pour qu'une page rouverte (meme appareil ou
   un autre) puisse afficher ou en est le rafraichissement au lieu de ne rien
   montrer.
+- Le bouton qui enchaine rafraichissement puis synthese Sonnet (« donnees et
+  analyse ») fait lui aussi tourner la synthese dans le cycle serveur : elle
+  dure 2 a 3 min de plus sous la meme exposition aux coupures, et un thread
+  detache ne peut pas enchainer une etape qui vit dans le script Streamlit. La
+  synthese est ecrite en base (`briefing_cache`, deja relue cross-appareil) sans
+  dependre de la session qui l'a declenchee. « Lancer l'analyse » (synthese
+  seule, sur l'existant) garde son appel direct.
 - Un second rafraichissement ne peut pas se lancer tant qu'un premier est en
   cours (aucun garde-fou aujourd'hui).
 - Affichage minimal, repris du style existant (caption + barre de progression) :

@@ -9,11 +9,13 @@ Couche donnees pure. Tables :
   - news_analysis   : sortie de la couche jugement (Claude) - clairement separee.
   - update_log      : journal des mises a jour.
   - briefing_cache  : dernier briefing Sonnet genere (persistant, cross-appareil).
+  - refresh_etat    : etat du cycle de rafraichissement (en cours / interrompu / termine).
 """
 
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -111,6 +113,17 @@ CREATE TABLE IF NOT EXISTS update_log (
     kind    TEXT,                 -- 'donnees' | 'news' | 'global'
     status  TEXT,
     detail  TEXT
+);
+
+CREATE TABLE IF NOT EXISTS refresh_etat (
+    id          INTEGER PRIMARY KEY,   -- toujours 1 : un seul cycle suivi a la fois
+    statut      TEXT NOT NULL,         -- 'en_cours' | 'interrompu' | 'termine'
+    kind        TEXT NOT NULL,         -- 'donnees' | 'news' | 'global' | 'global_analyse'
+    debut       TEXT NOT NULL,         -- ISO UTC : lancement du cycle
+    maj         TEXT NOT NULL,         -- ISO UTC : derniere progression ecrite
+    progression TEXT,                  -- libelle court affichable ("News 12/20")
+    resume      TEXT,                  -- compte rendu une fois le cycle clos
+    details     TEXT                   -- JSON : lignes « Detail par instrument » du cycle
 );
 
 CREATE TABLE IF NOT EXISTS briefing_cache (
@@ -307,6 +320,102 @@ def log_update(asof: str, kind: str, status: str, detail: str) -> None:
             "INSERT INTO update_log (asof, kind, status, detail) VALUES (?, ?, ?, ?)",
             (asof, kind, status, detail),
         )
+
+
+# --------------------------------------------------------------------------
+# Etat d'un cycle de rafraichissement (suivi cross-session, verrou d'exclusion)
+# --------------------------------------------------------------------------
+# Un cycle 'en_cours' dont la progression n'a pas bouge depuis ce delai est
+# presume mort (process redemarre : veille ou redeploiement Streamlit Cloud, le
+# thread a disparu avec lui). Un cycle normal dure 3 a 4 min et ecrit sa
+# progression a chaque instrument, donc 10 min de silence ne sont jamais un
+# cycle vivant. Sans cette requalification, un etat fantome bloquerait le
+# verrou d'exclusion pour toujours.
+DELAI_REFRESH_PERIME_S = 600
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _iso(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).isoformat(timespec="seconds")
+
+
+def _requalifier_si_perime(conn: sqlite3.Connection, maintenant: datetime) -> None:
+    row = conn.execute("SELECT statut, maj FROM refresh_etat WHERE id = 1").fetchone()
+    if not row or row["statut"] != "en_cours":
+        return
+    try:
+        derniere = datetime.fromisoformat(row["maj"])
+        if derniere.tzinfo is None:
+            derniere = derniere.replace(tzinfo=timezone.utc)
+        perime = (maintenant - derniere).total_seconds() > DELAI_REFRESH_PERIME_S
+    except Exception:
+        perime = True
+    if perime:
+        conn.execute("UPDATE refresh_etat SET statut = 'interrompu' WHERE id = 1")
+
+
+def demarrer_refresh(kind: str, maintenant: datetime | None = None) -> bool:
+    """Ouvre un cycle 'en_cours'. Renvoie False (rien ecrit) si un cycle vivant existe.
+
+    Lecture + ecriture dans une transaction IMMEDIATE : deux lancements
+    simultanes (deux clics, deux appareils) ne peuvent pas passer tous les deux.
+    """
+    maintenant = maintenant or _utc_now()
+    conn = get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        _requalifier_si_perime(conn, maintenant)
+        row = conn.execute("SELECT statut FROM refresh_etat WHERE id = 1").fetchone()
+        if row and row["statut"] == "en_cours":
+            conn.rollback()
+            return False
+        ts = _iso(maintenant)
+        conn.execute(
+            """INSERT INTO refresh_etat (id, statut, kind, debut, maj, progression, resume, details)
+               VALUES (1, 'en_cours', ?, ?, ?, 'Demarrage...', NULL, NULL)
+               ON CONFLICT(id) DO UPDATE SET
+                 statut='en_cours', kind=excluded.kind, debut=excluded.debut,
+                 maj=excluded.maj, progression=excluded.progression, resume=NULL,
+                 details=NULL""",
+            (kind, ts, ts),
+        )
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def maj_progression_refresh(progression: str, maintenant: datetime | None = None) -> None:
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE refresh_etat SET progression = ?, maj = ? WHERE id = 1 AND statut = 'en_cours'",
+            (progression, _iso(maintenant or _utc_now())),
+        )
+
+
+def terminer_refresh(statut: str, resume: str = "", maintenant: datetime | None = None,
+                     *, details: str | None = None) -> None:
+    """Clot le cycle : statut = 'termine' ou 'interrompu'. `details` = JSON des lignes
+    de detail par instrument (affichees sous le compte rendu)."""
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE refresh_etat SET statut = ?, resume = ?, details = ?, maj = ? WHERE id = 1",
+            (statut, resume, details, _iso(maintenant or _utc_now())),
+        )
+
+
+def etat_refresh(maintenant: datetime | None = None) -> dict | None:
+    """Etat du dernier cycle (None si aucun). Requalifie un cycle fantome en 'interrompu'."""
+    with get_conn() as conn:
+        _requalifier_si_perime(conn, maintenant or _utc_now())
+        row = conn.execute("SELECT * FROM refresh_etat WHERE id = 1").fetchone()
+        return dict(row) if row else None
 
 
 def save_briefing_cache(generated_at: str, donnees_asof: str | None, news_asof: str | None,

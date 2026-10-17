@@ -58,6 +58,8 @@ python -m tests.test_debt_to_equity
 python -m tests.test_classement_bourses
 python -m tests.test_societe_financiere
 python -m tests.test_masquage_alertes
+python -m tests.test_etat_refresh
+python -m tests.test_refresh_resilient
 ```
 
 Python 3.11+ (le devcontainer est en 3.11). `streamlit>=1.50` est un plancher
@@ -88,7 +90,7 @@ sam_invest/
   export.py                Export Markdown de tout l'etat de l'app
   glossaire.py             Definitions + formules du jargon -> tooltips (source de verite unique)
   logs.py                  Journal fichier data/sam_invest.log
-tests/                     3 scripts de non-regression autonomes
+tests/                     6 scripts de non-regression autonomes
 config.yaml                Watchlist + seuils des regles — VERSIONNE (aucun secret)
 config.template.yaml       Template commente de reference
 .env / .env.example        Cles API — .env JAMAIS versionne
@@ -127,12 +129,26 @@ config.yaml ──> config.load_config() ──> AppConfig (watchlist + regles +
 ```
 
 `update.update_global` = donnees + news. La fonction elle-meme ne declenche
-**jamais** la synthese Sonnet ; c'est l'UI (`app.py`) qui enchaine
-`update_global` puis `ecrire_synthese` quand on clique sur « 🔄 Mettre a jour
-donnees et analyse » (menu ☰) — deux appels distincts, pas une fusion des
-deux fonctions. `ecrire_synthese` seule (sans `update_global`) est aussi
-appelable directement via « 🧠 Lancer l'analyse » (page Ma synthese), pour
+**jamais** la synthese Sonnet. Les boutons de rafraichissement ne l'appellent
+pourtant plus dans le script Streamlit : ils passent par
+`update.lancer_refresh_arriere_plan(config, kind)` (`donnees` | `news` | `global`
+| `global_analyse`), qui lance le travail dans **un thread serveur** — sur
+mobile, un rafraichissement de 3-4 min lie a la connexion du navigateur se
+perdait des que le telephone passait en arriere-plan. `global_analyse` =
+`update_global` puis `update.generer_synthese` (Sonnet, sans `st`, ecrit
+`briefing_cache`). `app.ecrire_synthese` n'est plus qu'un enrobage UI de
+`generer_synthese`, appele par « 🧠 Lancer l'analyse » (page Ma synthese) pour
 regenerer le texte sur les donnees deja en base sans payer un rafraichissement.
+
+**Etat d'un cycle** : table `refresh_etat` (une ligne : `en_cours` | `interrompu`
+| `termine`, progression, resume, details). C'est elle, pas la session
+Streamlit, qui dit ou en est un rafraichissement : `db.demarrer_refresh` est
+aussi le **verrou** (un seul cycle a la fois, transaction IMMEDIATE) et
+`db.etat_refresh` requalifie en `interrompu` un `en_cours` muet depuis plus de
+`DELAI_REFRESH_PERIME_S` (process redemarre = thread mort). Ce thread est
+l'**unique ecrivain SQLite** pendant un cycle : ne pas y ajouter d'ecritures
+paralleles. News et classements Haiku s'ecrivent **ticker par ticker** dans
+`update_news` (jamais en bloc en fin de phase : une coupure ne doit rien perdre).
 
 **Chaine de repli des sources** : yfinance d'abord (gratuit, sans cle), puis
 Finnhub, puis FMP — pour menager les quotas. Regle d'or de `data_sources.py` :
@@ -211,9 +227,15 @@ par page, puis la navigation en fin de fichier.
   des cours/actualites deja en base — elle ne les rafraichit pas elle-meme.
   Le menu ☰ garde en plus **deux boutons globaux** (toute la watchlist, aucune
   page en particulier), executes **avant** `navigation.run()` comme les
-  alertes : « 🔄 Mettre a jour les donnees » (`update_global` : cours + news,
-  jamais la synthese) et « 🔄 Mettre a jour donnees et analyse » (`update_global`
-  puis `ecrire_synthese` — le seul bouton qui enchaine tout en un clic).
+  alertes : « 🔄 Mettre a jour les donnees » (kind `global` : cours + news,
+  jamais la synthese) et « 🔄 Mettre a jour donnees et analyse » (kind
+  `global_analyse` — le seul bouton qui enchaine tout en un clic).
+  **Les boutons d'actualisation ne bloquent plus** : `declencher_refresh` lance le
+  thread puis `st.rerun()`, et `bandeau_refresh` (juste avant `navigation.run()`)
+  affiche l'etat lu en base ; un `st.fragment(run_every="3s")` le tient a jour
+  et recharge toute la page a la fin du cycle. Les boutons sont desactives
+  (`CYCLE_VIVANT`) tant qu'un cycle tourne. Seule l'actualisation d'UN
+  instrument (page Vue entreprise, ~10 s) reste synchrone (`run_update`).
 - **Watchlist vide** -> `ecran_demarrage()` court-circuite la navigation. Ne pas
   afficher un menu et des tableaux vides a quelqu'un qui decouvre l'outil.
 - **Mobile d'abord** : usage principal = telephone. Les durees et les couts sont
@@ -257,9 +279,9 @@ reference deployee sur Streamlit Cloud. **`.env` et `data/` ne le sont jamais.**
   tete de script, pour que `load_secrets()` ait un seul chemin de code
   (`os.getenv`) en local comme en ligne.
 
-**SQLite** (`db.py`) — 13 tables : `prices`, `quotes`, `fundamentals`,
+**SQLite** (`db.py`) — 14 tables : `prices`, `quotes`, `fundamentals`,
 `events_estimates`, `analyst_ratings`, `profile`, `news`, `news_analysis`,
-`update_log`, `briefing_cache`, `flags_seen`, `flags_masques`,
+`update_log`, `refresh_etat`, `briefing_cache`, `flags_seen`, `flags_masques`,
 `diagnostic_cache`.
 
 - **Tout le SQL vit dans `db.py`.** Les autres modules appellent ses fonctions.
@@ -269,8 +291,9 @@ reference deployee sur Streamlit Cloud. **`.env` et `data/` ne le sont jamais.**
   Y penser systematiquement en modifiant `SCHEMA`.
 - **Concurrence** : dans `update_news`, le reseau et les appels LLM sont
   parallelises (`ThreadPoolExecutor`), mais **toutes les ecritures DB restent
-  dans le thread principal**. SQLite tolere mal les ecritures concurrentes — ne
-  pas deplacer un `db.upsert_*` dans un worker.
+  dans le thread qui a appele `update_news`** (le thread de rafraichissement, voir
+  §5). SQLite tolere mal les ecritures concurrentes — ne pas deplacer un
+  `db.upsert_*` dans un worker.
 
 ---
 
@@ -302,12 +325,15 @@ reference deployee sur Streamlit Cloud. **`.env` et `data/` ne le sont jamais.**
 
 ## 10. Tests
 
-Quatre scripts de **non-regression** dans `tests/`, ecrits sans framework : un
+Six scripts de **non-regression** dans `tests/`, ecrits sans framework : un
 `_run()` avec des `assert`, lance par `python -m tests.<module>`. Aucun ne touche
 au reseau ni a `data/`. Les trois premiers ne demandent que `pandas` ;
-`test_masquage_alertes` ouvre une base SQLite **temporaire** (`db.DB_PATH` est
-detourne vers un `TemporaryDirectory` avant tout appel) — a reproduire tel quel
-si un futur test doit toucher a la base.
+`test_masquage_alertes`, `test_etat_refresh` et `test_refresh_resilient` ouvrent
+une base SQLite **temporaire** (`db.DB_PATH` est detourne vers un
+`TemporaryDirectory` avant tout appel) — a reproduire tel quel si un futur test
+doit toucher a la base. Sous Windows, `db.py` ne ferme pas ses connexions
+explicitement : utiliser `TemporaryDirectory(ignore_cleanup_errors=True)`
+(`test_masquage_alertes` ne le fait pas et echoue au nettoyage, assertions OK).
 
 Chacun documente en tete le **bug reel** qu'il verrouille :
 
@@ -316,7 +342,9 @@ Chacun documente en tete le **bug reel** qu'il verrouille :
 | `test_debt_to_equity` | `yfinance.info['debtToEquity']` est **toujours** un pourcentage. L'ancienne heuristique "diviser si > 10" fabriquait de fausses alertes rouges (NVDA a 6,55 %). Priorite au calcul direct sur le bilan. |
 | `test_classement_bourses` | Une cotation relais (Munich, Francfort) ou marginale (MTF, OTC) doit passer **derriere** la cotation principale. Liste **noire**, jamais blanche : une place inconnue est presumee principale. |
 | `test_societe_financiere` | Banques/assureurs/holdings detectes par le secteur **ou** par la forme des etats. Peugeot Invest affichait 82,6 % de "marge nette" sans avertissement. |
-| `test_masquage_alertes` | Le masquage d'une alerte est un **report**, pas une suppression : il expire des que `donnees_asof` change. Oublier cette comparaison rendrait la croix definitive et ferait rater une degradation reelle. Seul test a toucher une base — **temporaire**, jamais `data/`. |
+| `test_masquage_alertes` | Le masquage d'une alerte est un **report**, pas une suppression : il expire des que `donnees_asof` change. Oublier cette comparaison rendrait la croix definitive et ferait rater une degradation reelle. Base **temporaire**, jamais `data/`. |
+| `test_etat_refresh` | Un cycle `en_cours` dont le process est mort ne doit pas bloquer le verrou a jamais (requalifie `interrompu` apres `DELAI_REFRESH_PERIME_S`), et un 2e lancement pendant un cycle vivant est refuse. |
+| `test_refresh_resilient` | Sur mobile le rafraichissement complet reussissait 1 fois sur 2 : il tournait dans le script du clic, lie a la connexion, et les news n'etaient ecrites qu'en fin de phase. Verrouille : thread detache, ecriture ticker par ticker **pendant** la phase, etat/verrou, coupure brutale (`interrompu`, acquis conserves), cycle `global_analyse`. |
 
 Convention a suivre : **quand un bug de donnees est corrige, ajouter un script du
 meme format** qui reproduit le cas d'origine, avec le contexte en docstring.

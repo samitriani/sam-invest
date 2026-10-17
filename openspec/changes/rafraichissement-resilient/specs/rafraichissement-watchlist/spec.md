@@ -52,6 +52,23 @@ fois tous les instruments de la watchlist traites.
 - **THEN** les actualites et classements deja obtenus pour les instruments
   traites restent enregistres en base
 
+### Requirement: Synthese incluse dans le cycle de rafraichissement avec analyse
+Quand un rafraichissement est demande avec analyse, la synthese Claude SHALL
+etre redigee et enregistree dans le meme cycle serveur, apres les donnees et
+les actualites, sans dependre de la session qui l'a declenche.
+
+#### Scenario: Coupure pendant la redaction de la synthese
+- **WHEN** la connexion de la session se coupe alors que le cycle redige la
+  synthese
+- **THEN** la synthese est tout de meme enregistree et consultable a la
+  reouverture de l'application, sans nouvel appel Claude
+
+#### Scenario: Les donnees ne sont pas refaites si seule la synthese manque
+- **WHEN** le cycle de donnees et d'actualites s'est termine mais la synthese
+  n'a pas pu etre redigee
+- **THEN** les donnees et actualites recuperees restent enregistrees et le
+  cycle signale que la synthese est manquante
+
 ### Requirement: Visibilite de l'etat d'un rafraichissement
 L'etat du dernier rafraichissement declenche (en cours, interrompu, ou
 termine) SHALL etre consultable depuis n'importe quelle session — y compris

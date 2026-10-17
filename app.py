@@ -71,8 +71,8 @@ from sam_invest.idees import generer_candidats
 from sam_invest.logs import log
 from sam_invest.config import (CONFIG_PATH, doublon_pour, doublons_probables,
                                load_config, save_watchlist)
-from sam_invest.update import (update_donnees, update_donnees_instrument,
-                               update_global, update_news)
+from sam_invest.update import (generer_synthese, lancer_refresh_arriere_plan,
+                               update_donnees_instrument)
 
 st.set_page_config(page_title="Sam_Invest", page_icon="📊", layout="wide",
                    initial_sidebar_state="auto")  # replie en burger sur telephone
@@ -185,6 +185,65 @@ def afficher_compte_rendu(cr: dict) -> None:
             st.text(d)
 
 
+# --------------------------------------------------------------------------
+# Rafraichissement en arriere-plan : lancement + etat lisible par toute session
+# --------------------------------------------------------------------------
+# Le travail tourne dans un thread serveur (update.lancer_refresh_arriere_plan),
+# donc une coupure du telephone ne l'arrete pas. L'etat vit en base : on l'affiche
+# ici au lieu d'un spinner bloquant, et il se retrouve a la reouverture.
+LIBELLE_CYCLE = {"donnees": "des cours", "news": "des actualites",
+                 "global": "des cours et actualites",
+                 "global_analyse": "des cours, actualites et de la synthese"}
+
+
+def refresh_en_cours() -> bool:
+    e = db.etat_refresh()
+    return bool(e and e["statut"] == "en_cours")
+
+
+def declencher_refresh(kind: str) -> None:
+    """Lance un rafraichissement sans l'attendre ; le bandeau prend le relais."""
+    if lancer_refresh_arriere_plan(config, kind) is None:
+        st.warning("⏳ Une mise a jour est deja en cours : attends sa fin.")
+    else:
+        st.rerun()
+
+
+@st.fragment(run_every="3s")
+def _etat_refresh_vivant() -> None:
+    e = db.etat_refresh()
+    if not e or e["statut"] != "en_cours":
+        st.rerun()  # cycle fini : recharge toute la page sur les donnees fraiches
+        return
+    st.info(f"⏳ Mise a jour {LIBELLE_CYCLE.get(e['kind'], '')} en cours — "
+            f"{e.get('progression') or 'demarrage'}. Elle continue sur le serveur : "
+            "tu peux quitter l'app et revenir.")
+
+
+def bandeau_refresh() -> None:
+    e = db.etat_refresh()
+    if not e:
+        return
+    if e["statut"] == "en_cours":
+        _etat_refresh_vivant()
+    elif e["statut"] == "interrompu":
+        st.warning(f"⚠️ La derniere mise a jour {LIBELLE_CYCLE.get(e['kind'], '')} a ete "
+                   f"interrompue ({e.get('progression') or 'avant la fin'}). Ce qui etait "
+                   "deja recupere est conserve ; relance-la si besoin.")
+    elif st.session_state.get("refresh_vu") != e["debut"]:
+        st.session_state["refresh_vu"] = e["debut"]  # compte rendu : une fois par session
+        msg = f"Mise a jour terminee le {fmt_dt(e['maj'])}. {e.get('resume') or ''}"
+        (st.warning if "manquante" in msg else st.success)(msg)
+        try:
+            lignes = json.loads(e.get("details") or "[]")
+        except Exception:
+            lignes = []
+        if lignes:
+            with st.expander("Detail par instrument"):
+                for d in lignes:
+                    st.text(d)
+
+
 def libelle_resultat(r: dict) -> str:
     """Libelle d'un resultat de recherche, avec alerte sur les cotations relais.
 
@@ -236,40 +295,14 @@ def fraicheur(kind: str) -> tuple[bool, str | None]:
 
 
 def ecrire_synthese(config) -> dict:
-    """UN appel Sonnet (ou reprise du cache si donnees/news inchangees).
+    """Enrobage UI de `update.generer_synthese` (UN appel Sonnet, ou cache).
 
     Appelee par « 🧠 Lancer l'analyse » (page Ma synthese, sur l'existant tel
-    quel) et par « 🔄 Mettre a jour donnees et analyse » (menu ☰, juste apres
-    avoir rafraichi cours et news via `update_global`) : cette fonction ne
-    rafraichit rien elle-meme, elle lit l'etat courant de la base et ecrit (ou
-    reutilise le cache si rien n'a change).
+    quel). Le travail (cache, appel Sonnet, ecriture de `briefing_cache`) vit
+    dans `generer_synthese`, sans Streamlit, pour pouvoir aussi tourner dans le
+    thread de « 🔄 Mettre a jour donnees et analyse » ; ici on ne fait que la
+    barre de progression et le `session_state`.
     """
-    _ad = db.last_update("donnees")
-    _ad = _ad.get("asof") if _ad else None
-    _an = db.last_update("news")
-    _an = _an.get("asof") if _an else None
-    _dd = construire_briefing(config)
-    _cache = db.get_briefing_cache()
-    _inchange = (_cache is not None
-                 and _cache.get("donnees_asof") == _ad
-                 and _cache.get("news_asof") == _an)
-    if _inchange:
-        # Donnees ET news identiques a la derniere generation : pas de nouvel
-        # appel Sonnet, on recharge simplement le texte deja genere.
-        st.session_state["synth_global"] = _cache.get("global")
-        try:
-            st.session_state["synth_instruments"] = json.loads(_cache.get("instruments") or "{}")
-        except Exception:
-            st.session_state["synth_instruments"] = {}
-        st.session_state["synthese_asof"] = _cache.get("synthese_asof")
-        log("[UI] briefing: donnees/news inchangees -> cache reutilise (pas d'appel Sonnet).")
-        return {"status": "info",
-                "resume": f"Donnees et news inchangees depuis la derniere synthese "
-                          f"(ecrite le {fmt_dt(_cache['generated_at'])}) : texte recupere "
-                          "sans nouvel appel Claude."}
-
-    log(f"[UI] generation briefing (watchlist={len(config.watchlist)}, "
-        f"instruments={len(_dd.get('instruments', []))})")
     tickers = [i.ticker for i in config.watchlist]
     total = max(len(tickers), 1)
     bar = st.progress(0.0, text="🧠 Redaction du briefing (Claude Sonnet)…")
@@ -287,35 +320,27 @@ def ecrire_synthese(config) -> dict:
                 bar.progress(min(done / total, 1.0),
                              text=f"🧠 Briefing par instrument… {min(done, total)}/{total}")
 
-    res = llm.synthese_et_reco(config.secrets, _dd, progress=_prog)
+    cr = generer_synthese(config, _prog)
     bar.empty()
-    if res:
-        st.session_state["synth_global"] = res.get("global")
-        st.session_state["synth_instruments"] = res.get("instruments", {})
-        m = db.last_update()
-        synthese_asof = m["asof"] if m else None
-        st.session_state["synthese_asof"] = synthese_asof
-        # Persistance en base (pas seulement session) : recuperation
-        # cross-appareil + reference pour eviter les appels redondants.
-        db.save_briefing_cache(
-            generated_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            donnees_asof=_ad, news_asof=_an, synthese_asof=synthese_asof,
-            global_text=res.get("global") or "",
-            instruments_json=json.dumps(res.get("instruments") or {}, ensure_ascii=False),
-        )
-        log(f"[UI] briefing stocke: global={len(res.get('global') or '')} chars, "
-            f"instruments={len(res.get('instruments') or {})}")
-        return {"status": "ok", "resume": "Synthese ecrite. Elle est enregistree : tu la "
-                                          "retrouveras meme apres une coupure ou depuis un "
-                                          "autre appareil."}
-
-    log("[UI] briefing = None -> rien a afficher", "error")
-    return {"status": "erreur",
-            "resume": "Claude n'a pas repondu : la synthese n'a pas pu etre ecrite. "
-                      "Le plus souvent c'est le reseau qui a lache pendant la redaction "
-                      "(elle dure 2 a 3 minutes) — reessaie, les cours et actualites "
-                      "recuperes, eux, sont deja enregistres. Detail dans "
-                      "`data/sam_invest.log`."}
+    if cr["status"] == "ok":
+        st.session_state["synth_global"] = cr.get("global")
+        st.session_state["synth_instruments"] = cr.get("instruments", {})
+        st.session_state["synthese_asof"] = cr.get("synthese_asof")
+    elif cr["status"] == "info":
+        # Donnees ET news identiques a la derniere generation : pas de nouvel
+        # appel Sonnet, on recharge simplement le texte deja genere.
+        _cache = cr["cache"]
+        st.session_state["synth_global"] = _cache.get("global")
+        try:
+            st.session_state["synth_instruments"] = json.loads(_cache.get("instruments") or "{}")
+        except Exception:
+            st.session_state["synth_instruments"] = {}
+        st.session_state["synthese_asof"] = _cache.get("synthese_asof")
+        cr = {"status": "info",
+              "resume": f"Donnees et news inchangees depuis la derniere synthese "
+                        f"(ecrite le {fmt_dt(_cache['generated_at'])}) : texte recupere "
+                        "sans nouvel appel Claude."}
+    return cr
 
 
 def afficher_compte_rendu_synthese(cr: dict) -> None:
@@ -896,8 +921,8 @@ def _ligne_cours(s) -> None:
 def page_cours():
     titre_page("📈", "Cours de bourse", "Ce qui a bouge aujourd'hui sur tes valeurs suivies.")
     caption_derniere_maj("donnees", "cours")
-    if st.button("🔄 Actualiser cette page", use_container_width=True):
-        afficher_compte_rendu(run_update(update_donnees, "Mise a jour des donnees"))
+    if st.button("🔄 Actualiser cette page", use_container_width=True, disabled=CYCLE_VIVANT):
+        declencher_refresh("donnees")
 
     snaps = signals.construire_snapshots(config)
 
@@ -929,8 +954,8 @@ def page_calendrier():
     titre_page("📅", "Calendrier des evenements",
                "Resultats et ex-dividende a venir, revisions d'estimations et consensus.")
     caption_derniere_maj("donnees", "cours")
-    if st.button("🔄 Actualiser cette page", use_container_width=True):
-        afficher_compte_rendu(run_update(update_donnees, "Mise a jour des donnees"))
+    if st.button("🔄 Actualiser cette page", use_container_width=True, disabled=CYCLE_VIVANT):
+        declencher_refresh("donnees")
 
     # Streamlit interdit d'imbriquer un expander dans un expander : les deux
     # tableaux sont chacun pliables, cote a cote sur la page plutot que dans
@@ -1019,8 +1044,8 @@ def page_calendrier():
 def page_news():
     titre_page("📰", "News", "Les actualites recentes de tes valeurs suivies, par instrument.")
     caption_derniere_maj("news", "actualites")
-    if st.button("🔄 Actualiser cette page", use_container_width=True):
-        afficher_compte_rendu(run_update(update_news, "Mise a jour des news"))
+    if st.button("🔄 Actualiser cette page", use_container_width=True, disabled=CYCLE_VIVANT):
+        declencher_refresh("news")
     st.caption("Cout Claude Haiku (classement + traduction).")
     if not config.secrets.anthropic_api_key:
         st.info("Sans cle Claude, les actualites s'affichent en clair mais ne sont "
@@ -1223,7 +1248,7 @@ def page_briefing():
 
     if st.button(
         "🧠 Lancer l'analyse", use_container_width=True,
-        disabled=not config.secrets.anthropic_api_key,
+        disabled=not config.secrets.anthropic_api_key or CYCLE_VIVANT,
         help=("Synthese Claude Sonnet sur les cours/actualites deja recuperes "
               "ci-dessus (ne les rafraichit pas elle-meme). Compte 2 a 3 min. "
               "Pour tout rafraichir avant, utilise « 🔄 Mettre a jour donnees "
@@ -1236,15 +1261,20 @@ def page_briefing():
     # --- Recuperation cross-appareil : le briefing genere est persiste en base (pas
     # seulement en session). Si cette session (nouvel appareil/navigateur) n'a encore
     # rien affiche, on recharge le dernier briefing genere - SANS appel Claude.
-    if not st.session_state.get("synth_global") and not st.session_state.get("synth_instruments"):
-        _cache = db.get_briefing_cache()
-        if _cache and _cache.get("global"):
-            st.session_state["synth_global"] = _cache.get("global")
-            try:
-                st.session_state["synth_instruments"] = json.loads(_cache.get("instruments") or "{}")
-            except Exception:
-                st.session_state["synth_instruments"] = {}
-            st.session_state["synthese_asof"] = _cache.get("synthese_asof")
+    # Rechargee aussi quand le cache est plus recent que la session : une synthese
+    # ecrite par un cycle en arriere-plan ne passe pas par cette session.
+    _cache = db.get_briefing_cache()
+    _session_vide = (not st.session_state.get("synth_global")
+                     and not st.session_state.get("synth_instruments"))
+    if _cache and _cache.get("global") and (
+            _session_vide
+            or _cache.get("synthese_asof") != st.session_state.get("synthese_asof")):
+        st.session_state["synth_global"] = _cache.get("global")
+        try:
+            st.session_state["synth_instruments"] = json.loads(_cache.get("instruments") or "{}")
+        except Exception:
+            st.session_state["synth_instruments"] = {}
+        st.session_state["synthese_asof"] = _cache.get("synthese_asof")
 
     data = construire_briefing(config)  # deterministe : lit la base, n'appelle pas Claude
 
@@ -2332,6 +2362,10 @@ PAGES = {
 }
 navigation = st.navigation(PAGES, position="sidebar")
 
+# Lu une fois par run : les boutons de mise a jour sont desactives tant qu'un cycle
+# tourne (le bandeau juste au-dessus du contenu dit pourquoi).
+CYCLE_VIVANT = refresh_en_cours()
+
 # Le menu n'accueille plus que l'action globale (watchlist entiere, aucune page
 # en particulier) : chaque page qui affiche des donnees porte desormais son
 # propre bouton d'actualisation (page_cours, page_calendrier, page_news,
@@ -2355,19 +2389,19 @@ with st.sidebar:
     # --- Actions globales restantes ici : les mises a jour scopees a une page
     # vivent desormais sur la page elle-meme (voir plus haut). ---
     btn_donnees = st.button(
-        "🔄 Mettre a jour les donnees", use_container_width=True,
+        "🔄 Mettre a jour les donnees", use_container_width=True, disabled=CYCLE_VIVANT,
         help="Cours + actualites (Haiku pour les news), pour toute la watchlist. "
              "N'ecrit pas la synthese.",
     )
 
     btn_donnees_analyse = st.button(
         "🔄 Mettre a jour donnees et analyse", use_container_width=True,
-        disabled=not config.secrets.anthropic_api_key,
+        disabled=not config.secrets.anthropic_api_key or CYCLE_VIVANT,
         help="Cours + actualites, puis la synthese Sonnet pour toute la liste.",
     )
     st.caption(
-        "⏱️ Cours + actualites, puis synthese (Claude Sonnet). Compte 3 a 4 min, "
-        "garde l'app ouverte."
+        "⏱️ Cours + actualites, puis synthese (Claude Sonnet). Compte 3 a 4 min ; "
+        "continue sur le serveur si tu quittes l'app."
         if config.secrets.anthropic_api_key
         else "ANTHROPIC_API_KEY absente : synthese desactivee."
     )
@@ -2391,10 +2425,9 @@ with st.sidebar:
 # (voir page_cours, page_calendrier, page_news, page_instrument, page_briefing)
 # s'executent, elles, dans la page elle-meme, avant qu'elle ne lise ses donnees.
 if btn_donnees:
-    afficher_compte_rendu(run_update(update_global, "Mise a jour globale"))
+    declencher_refresh("global")
 if btn_donnees_analyse:
-    afficher_compte_rendu(run_update(update_global, "Mise a jour globale"))
-    afficher_compte_rendu_synthese(ecrire_synthese(config))
+    declencher_refresh("global_analyse")
 
 # Flags calcules UNE fois par run, apres l'eventuelle mise a jour : ils
 # alimentent le menu des alertes ci-dessous et le tri de « Ma synthese ».
@@ -2407,6 +2440,7 @@ FLAGS_COURANTS = [
 with alertes_slot:
     rendre_menu_alertes(FLAGS_COURANTS)
 
+bandeau_refresh()
 navigation.run()
 
 # ==========================================================================
